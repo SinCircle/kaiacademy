@@ -1,0 +1,32 @@
+name: gaiyuan
+
+services:
+  web:
+    build:
+      context: .
+      target: development
+    env_file:
+      - path: ./.dev.vars
+        required: true
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      WRANGLER_WRITE_LOGS: "false"
+      WRANGLER_LOG_PATH: /app/.wrangler/logs
+      MINIFLARE_REGISTRY_PATH: /app/.wrangler/registry
+      CLOUDFLARE_INCLUDE_PROCESS_ENV: "true"
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+      - d1_data:/app/.wrangler
+    healthcheck:
+      test: ["CMD", "node", "-e", "Promise.all([fetch('http://127.0.0.1:3000/api/problems'),fetch('http://127.0.0.1:3000/api/avatar',{method:'HEAD'}),fetch('http://127.0.0.1:3000/api/auth/request-code',{method:'HEAD'})]).then(rs=>{if(rs.some(r=>!r.ok))process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  node_modules:
+  d1_data:

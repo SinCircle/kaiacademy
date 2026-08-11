@@ -1,0 +1,4 @@
+RESEND_API_KEY=re_replace_me
+EMAIL_FROM=丐院 <verify@example.com>
+# 可选：仅在使用兼容 Resend API 的测试端点时填写
+# RESEND_API_ENDPOINT=https://api.resend.com/emails

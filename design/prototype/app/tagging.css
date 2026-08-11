@@ -1,0 +1,21 @@
+.search-status { min-height: 18px; margin: 12px 0 0; color: #9b342b; font-size: 10px; }
+.empty-results { margin: 0; padding: 42px 0; color: var(--muted); font-size: 11px; text-align: center; }
+
+.problem-editor-form .editor-field { margin-bottom: 16px; }
+.problem-editor-form .tag-field > label { display: block; margin-bottom: 7px; color: #40403d; font-size: 10px; }
+.tag-combobox { position: relative; }
+.tag-input-shell { display: flex; min-height: 44px; flex-wrap: wrap; align-items: center; gap: 6px; border: 1px solid var(--line); padding: 6px 9px; background: var(--white); cursor: text; }
+.tag-input-shell:focus-within { border-color: var(--ink); }
+.problem-editor-form .tag-input-shell input { width: 180px; min-width: 120px; height: 28px; flex: 1; border: 0; padding: 0 3px; background: transparent; }
+.tag-chip { display: inline-flex; height: 28px; align-items: center; gap: 5px; padding: 0 6px 0 9px; background: var(--soft); color: #3f3f3b; font-size: 10px; }
+.tag-chip button { display: grid; width: 18px; height: 18px; place-items: center; border: 0; padding: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.tag-chip button:hover { color: var(--ink); }
+.tag-suggestions { position: absolute; z-index: 12; top: calc(100% + 5px); right: 0; left: 0; max-height: 248px; overflow-y: auto; border: 1px solid var(--line); background: var(--white); box-shadow: 0 12px 28px rgba(22, 22, 20, .1); }
+.tag-suggestions > button { display: flex; width: 100%; min-height: 38px; align-items: center; justify-content: space-between; border: 0; border-bottom: 1px solid var(--soft); padding: 0 11px; background: var(--white); color: var(--ink); cursor: pointer; font-size: 10px; text-align: left; }
+.tag-suggestions > button:last-child { border-bottom: 0; }
+.tag-suggestions > button:hover,
+.tag-suggestions > button.active { background: var(--soft); }
+.tag-suggestions small { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 8px; }
+.tag-field-help { display: block; margin-top: 7px; color: var(--muted); font-size: 9px; }
+.editor-form-status { min-height: 16px; margin: 0 0 10px; color: #9b342b; font-size: 10px; }
+.problem-editor-form > footer button:disabled { cursor: wait; opacity: .58; }

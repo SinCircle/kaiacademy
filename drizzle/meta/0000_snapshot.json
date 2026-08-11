@@ -1,0 +1,54 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "c8f3aae8-4c79-47c5-9dd2-2c31826c4c15",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "tables": {
+    "problem_tags": {
+      "name": "problem_tags",
+      "columns": {
+        "problem_id": { "name": "problem_id", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "tag": { "name": "tag", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {
+        "idx_problem_tags_tag": { "name": "idx_problem_tags_tag", "columns": ["tag"], "isUnique": false }
+      },
+      "foreignKeys": {
+        "problem_tags_problem_id_problems_id_fk": {
+          "name": "problem_tags_problem_id_problems_id_fk",
+          "tableFrom": "problem_tags",
+          "tableTo": "problems",
+          "columnsFrom": ["problem_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "problem_tags_problem_id_tag_pk": { "columns": ["problem_id", "tag"], "name": "problem_tags_problem_id_tag_pk" }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "problems": {
+      "name": "problems",
+      "columns": {
+        "id": { "name": "id", "type": "text", "primaryKey": true, "notNull": true, "autoincrement": false },
+        "title": { "name": "title", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "body": { "name": "body", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false },
+        "background": { "name": "background", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false, "default": "''" },
+        "status": { "name": "status", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false, "default": "'开放'" },
+        "created_at": { "name": "created_at", "type": "text", "primaryKey": false, "notNull": true, "autoincrement": false }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": { "schemas": {}, "tables": {}, "columns": {} },
+  "internal": { "indexes": {} }
+}
