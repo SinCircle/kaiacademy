@@ -1,6 +1,7 @@
 import type { SessionMember } from "./auth";
 import { AuthError } from "./auth";
 import { mediaBucket } from "./media";
+import { attachmentKeysForMemberDeletion, attachmentKeysForProblem, deleteAttachmentObjects } from "./message-attachments";
 import { asString, database, ensureDatabase } from "./runtime";
 
 const PROBLEM_STATUSES = ["开放", "已解决"];
@@ -53,8 +54,10 @@ export async function deleteAdminProblem(problemId: string, admin: SessionMember
   const existing = await database().prepare("SELECT id,title FROM problems WHERE id = ?")
     .bind(problemId).first<{ id: string; title: string }>();
   if (!existing) throw new AuthError("问题不存在", 404);
+  const attachmentKeys = await attachmentKeysForProblem(problemId);
   await database().prepare("DELETE FROM problems WHERE id = ?").bind(problemId).run();
   await audit(admin, "delete_problem", "problem", problemId, { title: existing.title });
+  await deleteAttachmentObjects(attachmentKeys);
   return { deleted: true };
 }
 
@@ -129,6 +132,7 @@ export async function deleteAdminMember(targetId: string, admin: SessionMember) 
     .bind(targetId).first<{ id: string; email: string; displayName: string; role: string; avatarKey: string | null }>();
   if (!existing) throw new AuthError("成员不存在", 404);
   if (existing.role === "superadmin") throw new AuthError("系统超级管理员不能被删除", 403);
+  const attachmentKeys = await attachmentKeysForMemberDeletion(targetId);
 
   await db.batch([
     db.prepare("DELETE FROM problems WHERE creator_id = ?").bind(targetId),
@@ -141,6 +145,7 @@ export async function deleteAdminMember(targetId: string, admin: SessionMember) 
     db.prepare("DELETE FROM members WHERE id = ?").bind(targetId),
   ]);
   await audit(admin, "delete_member", "member", targetId, { email: existing.email, displayName: existing.displayName });
+  await deleteAttachmentObjects(attachmentKeys);
   if (existing.avatarKey?.startsWith(`avatars/${targetId}/`)) {
     try { await mediaBucket().delete(existing.avatarKey); } catch { /* The account is deleted even if orphan cleanup is unavailable. */ }
   }

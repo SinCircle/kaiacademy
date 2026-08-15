@@ -2,6 +2,7 @@
 
 import { Plus, X } from "lucide-react";
 import { useEffect, useId, useMemo, useState } from "react";
+import { getCachedJson } from "../lib/client-cache";
 
 function fuzzyScore(candidate: string, query: string) {
   const value = candidate.toLocaleLowerCase();
@@ -28,7 +29,8 @@ export function TagCombobox({ value, onChange }: { value: string[]; onChange(tag
   const [knownTags, setKnownTags] = useState<string[]>([]);
 
   useEffect(() => {
-    fetch("/api/tags").then((response) => response.json() as Promise<{ tags?: string[] }>).then((data) => setKnownTags(data.tags ?? [])).catch(() => undefined);
+    getCachedJson<{ tags?: string[] }>("/api/tags", { onUpdate: (data) => setKnownTags(data.tags ?? []) })
+      .then((data) => setKnownTags(data.tags ?? [])).catch(() => undefined);
   }, []);
 
   const options = useMemo(() => {

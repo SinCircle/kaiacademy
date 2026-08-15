@@ -3,30 +3,29 @@ import { defineConfig } from "vite";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   "00000000-0000-4000-8000-000000000000";
+const D1_BINDING = "DB";
+const R2_BINDING = "MEDIA";
 
-const d1 = "DB";
-const r2 = "MEDIA";
+// macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
+const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
+const usePolling = isCodexSeatbeltSandbox || process.env.VITE_USE_POLLING === "true";
 
 const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat"],
-  d1_databases: d1
-    ? [
-        {
-          binding: d1,
-          database_name: "site-creator-d1",
-          database_id: SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
-        },
-      ]
-    : [],
-  r2_buckets: r2
-    ? [
-        {
-          binding: r2,
-          bucket_name: "site-creator-r2",
-        },
-      ]
-    : [],
+  d1_databases: [
+    {
+      binding: D1_BINDING,
+      database_name: "site-creator-d1",
+      database_id: SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
+    },
+  ],
+  r2_buckets: [
+    {
+      binding: R2_BINDING,
+      bucket_name: "site-creator-r2",
+    },
+  ],
   images: {
     binding: "IMAGES",
   },
@@ -43,6 +42,16 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    server: usePolling
+      ? {
+          watch: {
+            useFsEvents: false,
+            usePolling: true,
+            interval: 750,
+            ignored: ["**/.git/**", "**/node_modules/**", "**/.wrangler/**", "**/.vinext/**", "**/dist/**", "**/design/**"],
+          },
+        }
+      : undefined,
     plugins: [
       vinext(),
       cloudflare({

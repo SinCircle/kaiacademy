@@ -11,8 +11,10 @@ test("renders a readable HTML and plain-text verification message", () => {
 
   assert.match(email.subject, /012345/);
   assert.match(email.text, /012345/);
+  assert.match(email.text, /∑ 丐院/);
   assert.match(email.text, /8 分钟/);
   assert.match(email.html, /012345/);
+  assert.match(email.html, /&#8721;<\/span><span>丐院/);
   assert.match(email.html, /8 分钟/);
 });
 
@@ -39,6 +41,25 @@ test("sends the expected Resend request with an idempotency key", async () => {
   assert.deepEqual(JSON.parse(capturedInit.body).to, ["person@example.com"]);
   assert.equal(result.id, "email_test_123");
   assert.equal(result.to, "person@example.com");
+});
+
+test("renders and sends a dedicated password reset message", async () => {
+  let capturedInit;
+  const fakeFetch = async (_url, init) => {
+    capturedInit = init;
+    return new Response(JSON.stringify({ id: "password_reset_123" }), { status: 200 });
+  };
+  const rendered = renderVerificationEmail("112233", 10, "password-reset");
+  assert.match(rendered.subject, /密码重置/);
+  assert.match(rendered.html, /重置你的密码/);
+
+  await sendVerificationEmail(
+    { apiKey: "re_private_test_key", from: "丐院 <verify@example.com>" },
+    { to: "person@example.com", code: "112233", requestId: "reset-123", purpose: "password-reset" },
+    fakeFetch,
+  );
+  assert.equal(capturedInit.headers["Idempotency-Key"], "password-reset/reset-123");
+  assert.equal(JSON.parse(capturedInit.body).tags[0].value, "password_reset");
 });
 
 test("reports provider errors without leaking the API key", async () => {

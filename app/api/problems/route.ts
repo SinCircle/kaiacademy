@@ -1,6 +1,7 @@
 import { currentMember, requireMember } from "../../../db/auth";
 import { createProblem, listProblems } from "../../../db/queries";
-import { apiError, assertSameOrigin } from "../_shared";
+import { apiError, assertSameOrigin, cachedJsonResponse } from "../_shared";
+import { publishSyncInvalidation } from "../../../db/sync";
 
 function values(params: URLSearchParams, name: string) {
   return params.getAll(name).flatMap((value) => value.split(",")).map((value) => value.trim()).filter(Boolean);
@@ -19,7 +20,7 @@ export async function GET(request: Request) {
       viewerId: member?.id,
       viewerRole: member?.role,
     });
-    return Response.json({ problems });
+    return cachedJsonResponse(request, { problems });
   } catch (error) {
     return apiError(error, "暂时无法读取问题");
   }
@@ -30,6 +31,7 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const member = await requireMember(request);
     const problem = await createProblem(member, await request.json() as Record<string, unknown>);
+    await publishSyncInvalidation(["/api/problems", "/api/tags", "/api/members/", "/api/admin/problems"]);
     return Response.json({ problem }, { status: 201 });
   } catch (error) {
     return apiError(error, "发布失败，请稍后重试");

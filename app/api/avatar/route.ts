@@ -3,6 +3,7 @@ import { AppError } from "../../../db/errors";
 import { compressAvatar, imageProcessor, MAX_AVATAR_UPLOAD_BYTES, mediaBucket } from "../../../db/media";
 import { database, ensureDatabase } from "../../../db/runtime";
 import { apiError, assertSameOrigin } from "../_shared";
+import { publishSyncInvalidation } from "../../../db/sync";
 
 export async function POST(request: Request) {
   try {
@@ -33,6 +34,7 @@ export async function POST(request: Request) {
     if (previous?.avatarKey?.startsWith(`avatars/${member.id}/`) && previous.avatarKey !== key) {
       await bucket.delete(previous.avatarKey).catch(() => undefined);
     }
+    await publishSyncInvalidation([`/api/members/${member.id}`, "/api/members/me", "/api/session", "/api/problems", "/api/admin/"]);
     return Response.json({
       avatarUrl: `/api/avatars/${encodeURIComponent(member.id)}?v=${encodeURIComponent(updatedAt)}`,
       bytes: bytes.byteLength,

@@ -1,11 +1,12 @@
 "use client";
 
-import Link from "next/link";
-import { ArrowLeft, Save, Send } from "lucide-react";
+import { AppLink as Link } from "./AppLink";
+import { ArrowLeft, Save, Send, Trash2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import type { ProblemDetailData } from "../lib/types";
 import { SiteHeader } from "./SiteHeader";
 import { TagCombobox } from "./TagCombobox";
+import { ClientFetchError, getCachedJson, invalidateClientCache } from "../lib/client-cache";
 
 export function ProblemEditor({ mode, problemId }: { mode: "publish" | "settings"; problemId?: string }) {
   const settings = mode === "settings";
@@ -17,11 +18,12 @@ export function ProblemEditor({ mode, problemId }: { mode: "publish" | "settings
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
+  const [isCreator, setIsCreator] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (!settings) {
-      fetch("/api/session", { cache: "no-store" })
-        .then((response) => response.json() as Promise<{ member?: unknown }>)
+      getCachedJson<{ member?: unknown }>("/api/session", {})
         .then((session) => {
           if (!session.member) { window.location.assign("/login?returnTo=%2Fproblems%2Fnew"); return; }
           setLoading(false);
@@ -30,13 +32,7 @@ export function ProblemEditor({ mode, problemId }: { mode: "publish" | "settings
       return;
     }
     if (!problemId) return;
-    fetch(`/api/problems/${problemId}`, { cache: "no-store" })
-      .then(async (response) => {
-        if (response.status === 401) { window.location.assign(`/login?returnTo=${encodeURIComponent(`/problems/${problemId}/settings`)}`); return null; }
-        const data = await response.json() as ProblemDetailData & { message?: string };
-        if (!response.ok) throw new Error(data.message ?? "读取失败");
-        return data;
-      })
+    getCachedJson<ProblemDetailData>(`/api/problems/${problemId}`, {})
       .then((data) => {
         if (!data) return;
         if (!data.viewer.canEditProblem) { window.location.assign(`/problems/${problemId}`); return; }
@@ -45,8 +41,15 @@ export function ProblemEditor({ mode, problemId }: { mode: "publish" | "settings
         setBody(data.problem.body);
         setBackground(data.problem.background);
         setStatus(data.problem.status);
+        setIsCreator(data.viewer.isCreator);
       })
-      .catch((error) => setMessage(error instanceof Error ? error.message : "读取失败"))
+      .catch((error) => {
+        if (error instanceof ClientFetchError && error.status === 401) {
+          window.location.assign(`/login?returnTo=${encodeURIComponent(`/problems/${problemId}/settings`)}`);
+          return;
+        }
+        setMessage(error instanceof Error ? error.message : "读取失败");
+      })
       .finally(() => setLoading(false));
   }, [problemId, settings]);
 
@@ -63,10 +66,28 @@ export function ProblemEditor({ mode, problemId }: { mode: "publish" | "settings
       const data = await response.json() as { message?: string; problem?: { id: string } };
       if (response.status === 401) { window.location.assign(`/login?returnTo=${encodeURIComponent(window.location.pathname)}`); return; }
       if (!response.ok) throw new Error(data.message ?? "保存失败");
+      invalidateClientCache(["/api/problems", "/api/tags", "/api/members/", "/api/admin/", "/api/notifications"]);
       window.location.assign(`/problems/${settings ? problemId : data.problem?.id}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "保存失败");
       setSubmitting(false);
+    }
+  }
+
+  async function deleteProblem() {
+    if (!problemId) return;
+    if (!window.confirm("确认永久删除这个问题吗？问题正文、全部讨论、参与关系、动态、足迹和附件都会被删除，且无法恢复。")) return;
+    setDeleting(true);
+    setMessage("");
+    try {
+      const response = await fetch(`/api/problems/${problemId}`, { method: "DELETE" });
+      const data = await response.json() as { message?: string };
+      if (!response.ok) throw new Error(data.message ?? "删除失败");
+      invalidateClientCache(["/api/problems", `/api/problems/${problemId}`, "/api/tags", "/api/members/", "/api/admin/problems", "/api/notifications"]);
+      window.location.assign("/problems");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除失败");
+      setDeleting(false);
     }
   }
 
@@ -81,6 +102,7 @@ export function ProblemEditor({ mode, problemId }: { mode: "publish" | "settings
             <section><h2>基本信息</h2><label><span>标题</span><input onChange={(event) => setTitle(event.target.value)} placeholder="用一句话描述问题" required value={title} /></label><TagCombobox onChange={setTags} value={tags} /></section>
             <section><h2>问题内容</h2><label><span>问题正文</span><textarea onChange={(event) => setBody(event.target.value)} placeholder="支持 Markdown 与 $...$ / $$...$$ 数学公式" required rows={12} value={body} /></label><label><span>背景与已知进展</span><textarea onChange={(event) => setBackground(event.target.value)} placeholder="可选：说明来源、已有结论和允许使用的工具" rows={6} value={background} /></label></section>
             {settings && <section><h2>状态</h2><label><span>问题状态</span><select onChange={(event) => setStatus(event.target.value)} value={status}><option>开放</option><option>已解决</option></select></label></section>}
+            {settings && isCreator && <section className="problem-owner-settings"><header><div><h2>创建者设置</h2><p>删除后，问题及其全部关联内容都无法恢复。</p></div></header><button className="secondary-button danger" disabled={deleting} onClick={() => void deleteProblem()} type="button"><Trash2 aria-hidden="true" size={14} />{deleting ? "删除中…" : "删除问题"}</button></section>}
             <p className="form-message" aria-live="polite">{message}</p>
             <footer><button className="primary-button" disabled={submitting} type="submit">{settings ? <Save aria-hidden="true" size={14} /> : <Send aria-hidden="true" size={14} />}{submitting ? "保存中…" : settings ? "保存设置" : "发布问题"}</button></footer>
           </form>

@@ -28,10 +28,13 @@ export async function requestRegistrationCode(input: Record<string, unknown>, co
 
   const db = database();
   const invitation = await db
-    .prepare("SELECT code FROM invitation_codes WHERE code = ? AND used_by IS NULL")
+    .prepare(`SELECT invitation.code FROM invitation_codes invitation
+      JOIN members inviter ON inviter.id = invitation.created_by
+      WHERE invitation.code = ? AND invitation.used_by IS NULL AND invitation.used_at IS NULL
+        AND invitation.revoked_at IS NULL AND inviter.invite_quota > 0`)
     .bind(inviteCode)
     .first<{ code: string }>();
-  if (!invitation) throw new AppError("邀请码无效或已被使用");
+  if (!invitation) throw new AppError("邀请码无效、已被使用、已作废或邀请名额已用完");
 
   const existingMember = await db.prepare("SELECT id FROM members WHERE email = ?").bind(email).first();
   if (existingMember) throw new AppError("该邮箱已经注册");

@@ -11,6 +11,7 @@ export type VerificationEmailInput = {
   code: string;
   requestId: string;
   expiresInMinutes?: number;
+  purpose?: "registration" | "password-reset";
 };
 
 type FetchLike = typeof fetch;
@@ -56,16 +57,17 @@ function normalizedExpiry(value: number | undefined) {
   return minutes;
 }
 
-export function renderVerificationEmail(code: string, expiresInMinutes?: number) {
+export function renderVerificationEmail(code: string, expiresInMinutes?: number, purpose: "registration" | "password-reset" = "registration") {
   if (!/^\d{6}$/.test(code)) {
     throw new VerificationEmailError("验证码必须是 6 位数字", 400);
   }
 
   const minutes = normalizedExpiry(expiresInMinutes);
   const safeCode = escapeHtml(code);
-  const subject = `${code} 是你的丐院邮箱验证码`;
+  const resettingPassword = purpose === "password-reset";
+  const subject = `${code} 是你的丐院${resettingPassword ? "密码重置" : "邮箱"}验证码`;
   const text = [
-    "丐院邮箱验证",
+    `∑ 丐院${resettingPassword ? "密码重置" : "邮箱验证"}`,
     "",
     `你的验证码是：${code}`,
     `验证码将在 ${minutes} 分钟后失效。`,
@@ -76,9 +78,9 @@ export function renderVerificationEmail(code: string, expiresInMinutes?: number)
 <html lang="zh-CN">
   <body style="margin:0;background:#f4f1ea;color:#171715;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
     <div style="box-sizing:border-box;max-width:560px;margin:40px auto;padding:40px;background:#fff;border:1px solid #d9d4c9">
-      <div style="margin-bottom:28px;font-family:Georgia,'Times New Roman',serif;font-size:22px">丐院</div>
-      <h1 style="margin:0 0 12px;font-size:22px;font-weight:600">验证你的邮箱</h1>
-      <p style="margin:0 0 24px;color:#625f58;font-size:14px;line-height:1.7">请在注册页面输入以下验证码：</p>
+      <div style="margin-bottom:28px;font-family:Georgia,'Times New Roman',serif;font-size:22px"><span style="display:inline-block;margin-right:9px;font-size:27px;line-height:1;vertical-align:-2px">&#8721;</span><span>丐院</span></div>
+      <h1 style="margin:0 0 12px;font-size:22px;font-weight:600">${resettingPassword ? "重置你的密码" : "验证你的邮箱"}</h1>
+      <p style="margin:0 0 24px;color:#625f58;font-size:14px;line-height:1.7">请在${resettingPassword ? "密码重置" : "注册"}页面输入以下验证码：</p>
       <div style="margin:0 0 24px;padding:18px 20px;background:#f4f1ea;letter-spacing:10px;text-align:center;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:32px;font-weight:700">${safeCode}</div>
       <p style="margin:0 0 8px;color:#625f58;font-size:13px;line-height:1.7">验证码将在 ${minutes} 分钟后失效。</p>
       <p style="margin:0;color:#8b877f;font-size:12px;line-height:1.7">如果不是你本人发起的操作，请忽略此邮件。请勿把验证码告诉任何人。</p>
@@ -120,13 +122,14 @@ export async function sendVerificationEmail(
     throw new VerificationEmailError("邮件请求 ID 不正确", 400);
   }
 
-  const content = renderVerificationEmail(input.code, input.expiresInMinutes);
+  const purpose = input.purpose ?? "registration";
+  const content = renderVerificationEmail(input.code, input.expiresInMinutes, purpose);
   const response = await fetchImpl(config.endpoint ?? RESEND_EMAIL_ENDPOINT, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      "Idempotency-Key": `email-verification/${requestId}`,
+      "Idempotency-Key": `${purpose === "password-reset" ? "password-reset" : "email-verification"}/${requestId}`,
       "User-Agent": "gaiyuan/1.0",
     },
     body: JSON.stringify({
@@ -135,7 +138,7 @@ export async function sendVerificationEmail(
       subject: content.subject,
       html: content.html,
       text: content.text,
-      tags: [{ name: "category", value: "email_verification" }],
+      tags: [{ name: "category", value: purpose === "password-reset" ? "password_reset" : "email_verification" }],
     }),
   });
 

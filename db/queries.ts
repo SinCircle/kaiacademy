@@ -1,6 +1,8 @@
 import type { SessionMember } from "./auth";
 import { AuthError } from "./auth";
+import { attachmentKeysForMessageBranch, attachmentKeysForProblem, deleteAttachmentObjects, stageMessageAttachments } from "./message-attachments";
 import { asString, database, ensureDatabase, jsonArray } from "./runtime";
+import { PLAYGROUND_COMMENT_MARKERS, isPlaygroundCommentMarker, type PlaygroundCommentReaction } from "../app/lib/playground";
 
 type ProblemRow = {
   id: string;
@@ -296,12 +298,31 @@ export async function getProblemDetail(problemId: string, viewer: SessionMember)
     ORDER BY message.created_at ASC`)
     .bind(viewer.id, problemId)
     .all<MessageRow>();
+  const reactionRows = await db.prepare(`SELECT reaction.message_id AS messageId,reaction.emoji,COUNT(*) AS count,
+      MAX(CASE WHEN reaction.member_id = ? THEN 1 ELSE 0 END) AS reactedByViewer
+    FROM message_reactions reaction
+    JOIN messages message ON message.id = reaction.message_id
+    WHERE message.problem_id = ?
+    GROUP BY reaction.message_id,reaction.emoji`)
+    .bind(viewer.id, problemId)
+    .all<{ messageId: string; emoji: string; count: number; reactedByViewer: number }>();
+  const reactionOrder = new Map(PLAYGROUND_COMMENT_MARKERS.map((option, index) => [option.emoji, index]));
+  const reactionsByMessage = new Map<string, PlaygroundCommentReaction[]>();
+  for (const reaction of reactionRows.results) {
+    if (!isPlaygroundCommentMarker(reaction.emoji)) continue;
+    const reactions = reactionsByMessage.get(reaction.messageId) ?? [];
+    reactions.push({ emoji: reaction.emoji, count: Number(reaction.count), reactedByViewer: Boolean(reaction.reactedByViewer) });
+    reactionsByMessage.set(reaction.messageId, reactions);
+  }
+  for (const reactions of reactionsByMessage.values()) {
+    reactions.sort((left, right) => (reactionOrder.get(left.emoji) ?? 999) - (reactionOrder.get(right.emoji) ?? 999));
+  }
 
   const viewerMembership = people.results.find((person) => person.id === viewer.id);
   const isCreator = problem.creatorId === viewer.id;
   const isManager = Boolean(viewerMembership?.isManager);
   const canModerateComments = isCreator || isManager || viewer.role === "admin" || viewer.role === "superadmin";
-  const locked = isCreator || isManager || Boolean(viewerMembership?.isAdopted);
+  const locked = Boolean(viewerMembership?.isAdopted);
   const allMembers = (isCreator || isManager) ? await db
     .prepare(`SELECT id, username, display_name AS displayName, initials
       FROM members
@@ -331,7 +352,9 @@ export async function getProblemDetail(problemId: string, viewer: SessionMember)
       isHiddenBranch: Boolean(root),
       isAdopted: Boolean(message.isAdopted),
       isVoted: Boolean(message.isVoted),
+      reactions: reactionsByMessage.get(message.id) ?? [],
       upvotes: Number(message.upvotes),
+      canLabel: message.authorId === viewer.id,
       canHide: message.authorId === viewer.id,
       canDelete: canModerateComments,
     }];
@@ -361,7 +384,7 @@ export async function getProblemDetail(problemId: string, viewer: SessionMember)
       isCreator,
       isManager,
       canManageParticipants: isCreator || isManager,
-      canEditProblem: isCreator,
+      canEditProblem: isCreator || viewer.role === "admin" || viewer.role === "superadmin",
       canAdopt: isCreator,
       canModerateComments,
     },
@@ -411,8 +434,8 @@ export async function applyProblemAction(problemId: string, viewer: SessionMembe
   if (action === "relationship") {
     const relation = asString(payload.relation, 20);
     if (!(["watching", "following", "participating"] as string[]).includes(relation)) throw new AuthError("关系状态无效");
-    if (relation !== "participating" && (authority.isCreator || authority.isManager || authority.isAdopted)) {
-      throw new AuthError("创建者、管理者或内容被采纳者必须保持参与状态");
+    if (relation !== "participating" && authority.isAdopted) {
+      throw new AuthError("内容被采纳者必须保持参与状态");
     }
     if (relation === "watching") {
       await db.prepare("DELETE FROM problem_members WHERE problem_id = ? AND member_id = ?").bind(problemId, viewer.id).run();
@@ -427,21 +450,35 @@ export async function applyProblemAction(problemId: string, viewer: SessionMembe
   }
 
   if (action === "create_message") {
-    const body = asString(payload.body, 20_000);
     const parentId = asString(payload.parentId, 100) || null;
-    if (!body) throw new AuthError("消息不能为空");
     if (parentId) {
       const parent = await db.prepare("SELECT id FROM messages WHERE id = ? AND problem_id = ?").bind(parentId, problemId).first();
       if (!parent) throw new AuthError("回复的消息不存在", 404);
     }
-    await db.prepare("INSERT INTO messages (id,problem_id,parent_id,author_id,body,kind,is_adopted,upvotes,created_at,updated_at) VALUES (?,?,?,?,?,NULL,0,0,?,?)")
-      .bind(`message-${crypto.randomUUID()}`, problemId, parentId, viewer.id, body, now, now).run();
-    await db.prepare("UPDATE problems SET updated_at = ? WHERE id = ?").bind(now, problemId).run();
+    const messageId = `message-${crypto.randomUUID()}`;
+    const staged = await stageMessageAttachments(messageId, payload.body, payload.attachments, now);
+    try {
+      await db.batch([
+        db.prepare("INSERT INTO messages (id,problem_id,parent_id,author_id,body,kind,is_adopted,upvotes,created_at,updated_at) VALUES (?,?,?,?,?,NULL,0,0,?,?)")
+          .bind(messageId, problemId, parentId, viewer.id, staged.body, now, now),
+        ...staged.records.map((attachment) => db.prepare(`INSERT INTO message_attachments
+          (id,message_id,title,storage_key,byte_size,created_at) VALUES (?,?,?,?,?,?)`)
+          .bind(attachment.id, attachment.messageId, attachment.title, attachment.storageKey, attachment.byteSize, attachment.createdAt)),
+        db.prepare(`INSERT INTO problem_members (problem_id,member_id,relation,is_manager,joined_at)
+          VALUES (?,?,'participating',0,?)
+          ON CONFLICT(problem_id,member_id) DO UPDATE SET relation = 'participating'`)
+          .bind(problemId, viewer.id, now),
+        db.prepare("UPDATE problems SET updated_at = ? WHERE id = ?").bind(now, problemId),
+      ]);
+    } catch (error) {
+      await deleteAttachmentObjects(staged.uploadedKeys);
+      throw error;
+    }
     await notifyProblem(problemId, viewer.id, parentId ? "reply" : "discussion", `${viewer.displayName}${parentId ? "回复了讨论" : "发表了新讨论"}`);
     return;
   }
 
-  if (["message_label", "message_vote", "message_adopt", "message_hide", "message_delete"].includes(action)) {
+  if (["message_label", "message_vote", "message_reaction", "message_adopt", "message_hide", "message_delete"].includes(action)) {
     const messageId = asString(payload.messageId, 100);
     const message = await db
       .prepare("SELECT id,author_id AS authorId,kind,is_hidden AS isHidden,is_adopted AS isAdopted FROM messages WHERE id = ? AND problem_id = ?")
@@ -459,7 +496,33 @@ export async function applyProblemAction(problemId: string, viewer: SessionMembe
       .bind(messageId, problemId).first<{ authorId: string }>();
     if (hiddenRoot && !canModerateComments && hiddenRoot.authorId !== viewer.id) throw new AuthError("消息不存在", 404);
 
+    if (action === "message_reaction") {
+      const marker = payload.marker;
+      if (!isPlaygroundCommentMarker(marker)) throw new AuthError("表情无效");
+      const existing = await db.prepare("SELECT message_id FROM message_reactions WHERE message_id = ? AND member_id = ? AND emoji = ?")
+        .bind(messageId, viewer.id, marker).first();
+      if (existing) {
+        await db.batch([
+          db.prepare("DELETE FROM message_reactions WHERE message_id = ? AND member_id = ? AND emoji = ?")
+            .bind(messageId, viewer.id, marker),
+          db.prepare(`INSERT INTO problem_members (problem_id,member_id,relation,is_manager,joined_at)
+            VALUES (?,?,'following',0,?) ON CONFLICT(problem_id,member_id) DO NOTHING`)
+            .bind(problemId, viewer.id, now),
+        ]);
+      } else {
+        await db.batch([
+          db.prepare("INSERT INTO message_reactions (message_id,member_id,emoji,created_at) VALUES (?,?,?,?)")
+            .bind(messageId, viewer.id, marker, now),
+          db.prepare(`INSERT INTO problem_members (problem_id,member_id,relation,is_manager,joined_at)
+            VALUES (?,?,'following',0,?) ON CONFLICT(problem_id,member_id) DO NOTHING`)
+            .bind(problemId, viewer.id, now),
+        ]);
+      }
+      return;
+    }
+
     if (action === "message_label") {
+      if (message.authorId !== viewer.id) throw new AuthError("只能标记自己发布的评论", 403);
       const kind = asString(payload.kind, 10);
       if (!(["解法", "见解", "反例"] as string[]).includes(kind)) throw new AuthError("消息标记无效");
       await db.prepare("UPDATE messages SET kind = ?, updated_at = ? WHERE id = ?")
@@ -474,11 +537,17 @@ export async function applyProblemAction(problemId: string, viewer: SessionMembe
         await db.batch([
           db.prepare("DELETE FROM message_votes WHERE message_id = ? AND member_id = ?").bind(messageId, viewer.id),
           db.prepare("UPDATE messages SET upvotes = MAX(0, upvotes - 1) WHERE id = ?").bind(messageId),
+          db.prepare(`INSERT INTO problem_members (problem_id,member_id,relation,is_manager,joined_at)
+            VALUES (?,?,'following',0,?) ON CONFLICT(problem_id,member_id) DO NOTHING`)
+            .bind(problemId, viewer.id, now),
         ]);
       } else {
         await db.batch([
           db.prepare("INSERT INTO message_votes (message_id,member_id,created_at) VALUES (?,?,?)").bind(messageId, viewer.id, now),
           db.prepare("UPDATE messages SET upvotes = upvotes + 1 WHERE id = ?").bind(messageId),
+          db.prepare(`INSERT INTO problem_members (problem_id,member_id,relation,is_manager,joined_at)
+            VALUES (?,?,'following',0,?) ON CONFLICT(problem_id,member_id) DO NOTHING`)
+            .bind(problemId, viewer.id, now),
         ]);
       }
       return;
@@ -494,6 +563,7 @@ export async function applyProblemAction(problemId: string, viewer: SessionMembe
 
     if (action === "message_delete") {
       if (!canModerateComments) throw new AuthError("只有问题管理者或站点管理员可以删除评论", 403);
+      const attachmentKeys = await attachmentKeysForMessageBranch(problemId, messageId);
       await db.batch([
         db.prepare(`WITH RECURSIVE descendants(id) AS (
           SELECT id FROM messages WHERE id = ? AND problem_id = ?
@@ -503,6 +573,7 @@ export async function applyProblemAction(problemId: string, viewer: SessionMembe
         ) DELETE FROM messages WHERE id IN (SELECT id FROM descendants)`).bind(messageId, problemId, problemId),
         db.prepare("UPDATE problems SET updated_at = ? WHERE id = ?").bind(now, problemId),
       ]);
+      await deleteAttachmentObjects(attachmentKeys);
       return;
     }
 
@@ -524,7 +595,7 @@ export async function applyProblemAction(problemId: string, viewer: SessionMembe
     const targetId = asString(payload.memberId, 100);
     const participating = Boolean(payload.participating);
     const target = await problemAuthority(problemId, { ...viewer, id: targetId });
-    if (!participating && (target.isCreator || target.isManager || target.isAdopted)) throw new AuthError("该成员必须保持参与状态");
+    if (!participating && target.isAdopted) throw new AuthError("该成员的内容已被采纳，必须保持参与状态");
     if (!authority.isCreator && target.isManager) throw new AuthError("管理者不能修改其他管理者", 403);
     if (participating) {
       await db.prepare(`INSERT INTO problem_members (problem_id,member_id,relation,is_manager,joined_at)
@@ -552,7 +623,7 @@ export async function applyProblemAction(problemId: string, viewer: SessionMembe
   }
 
   if (action === "update_problem") {
-    if (!authority.isCreator) throw new AuthError("只有创建者可以修改问题", 403);
+    if (!(authority.isCreator || viewer.role === "admin" || viewer.role === "superadmin")) throw new AuthError("只有创建者或站点管理员可以修改问题", 403);
     const title = asString(payload.title, 140);
     const body = asString(payload.body, 30_000);
     const background = asString(payload.background, 20_000);
@@ -573,6 +644,18 @@ export async function applyProblemAction(problemId: string, viewer: SessionMembe
   throw new AuthError("未知操作");
 }
 
+export async function deleteCreatedProblem(problemId: string, viewer: SessionMember) {
+  await ensureDatabase();
+  const problem = await database().prepare("SELECT id,creator_id AS creatorId FROM problems WHERE id = ?")
+    .bind(problemId).first<{ id: string; creatorId: string }>();
+  if (!problem) throw new AuthError("问题不存在", 404);
+  if (problem.creatorId !== viewer.id) throw new AuthError("只有创建者可以删除问题", 403);
+  const attachmentKeys = await attachmentKeysForProblem(problemId);
+  await database().prepare("DELETE FROM problems WHERE id = ? AND creator_id = ?").bind(problemId, viewer.id).run();
+  await deleteAttachmentObjects(attachmentKeys);
+  return { deleted: true };
+}
+
 type ProfileRow = {
   id: string;
   email: string;
@@ -586,6 +669,8 @@ type ProfileRow = {
   specialties: string;
   role: string;
   inviteQuota: number;
+  apiEnabled: number;
+  apiQualified: number;
   createdAt: string;
 };
 
@@ -594,7 +679,9 @@ export async function getMemberProfile(targetId: string, viewer: SessionMember) 
   const db = database();
   const member = await db
     .prepare(`SELECT id,email,username,display_name AS displayName,initials,avatar_updated_at AS avatarUpdatedAt,bio,location,public_email AS publicEmail,
-      specialties,role,invite_quota AS inviteQuota,created_at AS createdAt FROM members WHERE id = ?`)
+      specialties,role,invite_quota AS inviteQuota,api_enabled AS apiEnabled,
+      EXISTS(SELECT 1 FROM messages api_message WHERE api_message.author_id = members.id) AS apiQualified,
+      created_at AS createdAt FROM members WHERE id = ?`)
     .bind(targetId).first<ProfileRow>();
   if (!member) throw new AuthError("成员不存在", 404);
   const problemRows = await db
@@ -626,17 +713,74 @@ export async function getMemberProfile(targetId: string, viewer: SessionMember) 
       viewer.role,
     )
     .all<{ id: string; shortCode: string; title: string; status: string; updatedAt: string; relation: string | null; isCreator: number; lastViewedAt: string | null; hasInteracted: number }>();
+  const privatePlaygroundViewerKey = viewer.id === targetId ? `member:${targetId}` : "__private_footprints__";
+  const playgroundRows = await db
+    .prepare(`SELECT post.id,post.title,post.created_at AS createdAt,post.updated_at AS updatedAt,
+      (SELECT COUNT(*) FROM playground_resources resource WHERE resource.post_id = post.id) AS resourceCount,
+      CASE WHEN post.author_id = ? THEN 1 ELSE 0 END AS isAuthor,
+      (SELECT interaction.last_interacted_at FROM playground_interactions interaction
+        WHERE interaction.post_id = post.id AND interaction.member_id = ?) AS lastInteractedAt,
+      (SELECT bookmark.created_at FROM playground_bookmarks bookmark
+        WHERE bookmark.post_id = post.id AND bookmark.member_id = ?) AS bookmarkedAt,
+      (SELECT MAX(visit.created_at) FROM playground_views visit
+        WHERE visit.post_id = post.id AND visit.viewer_key = ?) AS lastViewedAt
+      FROM playground_posts post
+      WHERE (post.author_id = ?
+        OR EXISTS(SELECT 1 FROM playground_interactions interaction
+          WHERE interaction.post_id = post.id AND interaction.member_id = ?)
+        OR EXISTS(SELECT 1 FROM playground_bookmarks bookmark
+          WHERE bookmark.post_id = post.id AND bookmark.member_id = ?)
+        OR EXISTS(SELECT 1 FROM playground_views visit
+          WHERE visit.post_id = post.id AND visit.viewer_key = ?))
+        AND (post.is_hidden = 0 OR ? IN ('admin', 'superadmin'))
+      ORDER BY post.updated_at DESC`)
+    .bind(
+      targetId,
+      targetId,
+      targetId,
+      privatePlaygroundViewerKey,
+      targetId,
+      targetId,
+      targetId,
+      privatePlaygroundViewerKey,
+      viewer.role,
+    )
+    .all<{
+      id: string;
+      title: string;
+      createdAt: string;
+      updatedAt: string;
+      resourceCount: number;
+      isAuthor: number;
+      lastInteractedAt: string | null;
+      bookmarkedAt: string | null;
+      lastViewedAt: string | null;
+    }>();
   const invitations = viewer.id === targetId ? await db
-    .prepare("SELECT code,created_at AS createdAt,used_at AS usedAt FROM invitation_codes WHERE created_by = ? ORDER BY created_at DESC LIMIT 20")
-    .bind(targetId).all<{ code: string; createdAt: string; usedAt: string | null }>() : { results: [] };
+    .prepare(`SELECT code,created_at AS createdAt FROM invitation_codes
+      WHERE created_by = ? AND used_by IS NULL AND used_at IS NULL AND revoked_at IS NULL
+      ORDER BY created_at DESC LIMIT 100`)
+    .bind(targetId).all<{ code: string; createdAt: string }>() : { results: [] };
   return {
-    member: { ...member, specialties: jsonArray(member.specialties), inviteQuota: Number(member.inviteQuota) },
+    member: {
+      ...member,
+      specialties: jsonArray(member.specialties),
+      inviteQuota: Number(member.inviteQuota),
+      apiEnabled: Boolean(member.apiEnabled) && Boolean(member.apiQualified),
+      apiQualified: Boolean(member.apiQualified),
+    },
     problems: problemRows.results.map((problem) => ({ ...problem, isCreator: Boolean(problem.isCreator), hasInteracted: Boolean(problem.hasInteracted) })),
+    playground: playgroundRows.results.map((post) => ({
+      ...post,
+      resourceCount: Number(post.resourceCount),
+      isAuthor: Boolean(post.isAuthor),
+      hasInteracted: Boolean(post.lastInteractedAt),
+      isBookmarked: Boolean(post.bookmarkedAt),
+    })),
     invitations: invitations.results,
     viewer: {
       id: viewer.id,
       isSelf: viewer.id === targetId,
-      canEditQuota: viewer.role === "superadmin" && viewer.id !== targetId,
     },
   };
 }
@@ -644,30 +788,43 @@ export async function getMemberProfile(targetId: string, viewer: SessionMember) 
 export async function generateInvitation(viewer: SessionMember) {
   await ensureDatabase();
   const db = database();
-  const outstanding = await db.prepare("SELECT code FROM invitation_codes WHERE created_by = ? AND used_by IS NULL LIMIT 1")
-    .bind(viewer.id).first<{ code: string }>();
-  if (outstanding) throw new AuthError("已有尚未使用的邀请码，请等待使用后再生成");
-  const member = await db.prepare("SELECT invite_quota AS inviteQuota FROM members WHERE id = ?")
-    .bind(viewer.id).first<{ inviteQuota: number }>();
+  const member = await db.prepare(`SELECT invite_quota AS inviteQuota,
+      (SELECT COUNT(*) FROM invitation_codes invitation
+        WHERE invitation.created_by = members.id AND invitation.used_by IS NULL
+          AND invitation.used_at IS NULL AND invitation.revoked_at IS NULL) AS activeInvitations
+      FROM members WHERE id = ?`)
+    .bind(viewer.id).first<{ inviteQuota: number; activeInvitations: number }>();
   if (!member || Number(member.inviteQuota) <= 0) throw new AuthError("当前没有可用邀请额度");
+  if (Number(member.activeInvitations) >= Number(member.inviteQuota)) {
+    throw new AuthError("未使用邀请码数量已达到剩余邀请名额");
+  }
   const raw = crypto.randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase();
   const code = `MATH-${raw.slice(0, 4)}-${raw.slice(4)}`;
   const now = new Date().toISOString();
-  await db.batch([
-    db.prepare("UPDATE members SET invite_quota = invite_quota - 1 WHERE id = ? AND invite_quota > 0").bind(viewer.id),
-    db.prepare("INSERT INTO invitation_codes (code,created_by,used_by,created_at,used_at) VALUES (?,?,NULL,?,NULL)")
-      .bind(code, viewer.id, now),
-  ]);
+  try {
+    await db.prepare("INSERT INTO invitation_codes (code,created_by,used_by,created_at,used_at,revoked_at) VALUES (?,?,NULL,?,NULL,NULL)")
+      .bind(code, viewer.id, now).run();
+  } catch (error) {
+    if (error instanceof Error && /INVITATION_LIMIT_REACHED/i.test(error.message)) {
+      throw new AuthError("未使用邀请码数量已达到剩余邀请名额", 409);
+    }
+    throw error;
+  }
   return { code };
 }
 
-export async function updateInviteQuota(targetId: string, viewer: SessionMember, quotaValue: unknown) {
+export async function revokeInvitation(viewer: SessionMember, codeValue: unknown) {
   await ensureDatabase();
-  if (viewer.role !== "superadmin" || viewer.id === targetId) throw new AuthError("只有超级管理员可以修改其他成员的邀请额度", 403);
-  const quota = Number(quotaValue);
-  if (!Number.isInteger(quota) || quota < 0 || quota > 10_000) throw new AuthError("邀请额度必须是 0 到 10000 的整数");
-  await database().prepare("UPDATE members SET invite_quota = ? WHERE id = ?").bind(quota, targetId).run();
-  return { quota };
+  const code = asString(codeValue, 40).toUpperCase();
+  if (!code) throw new AuthError("请选择要作废的邀请码");
+  const invitation = await database().prepare(`SELECT code FROM invitation_codes
+    WHERE code = ? AND created_by = ? AND used_by IS NULL AND used_at IS NULL AND revoked_at IS NULL`)
+    .bind(code, viewer.id).first<{ code: string }>();
+  if (!invitation) throw new AuthError("邀请码不存在、已使用或已作废", 404);
+  await database().prepare(`UPDATE invitation_codes SET revoked_at = ?
+    WHERE code = ? AND created_by = ? AND used_by IS NULL AND used_at IS NULL AND revoked_at IS NULL`)
+    .bind(new Date().toISOString(), code, viewer.id).run();
+  return { ok: true };
 }
 
 export async function updateMemberProfile(targetId: string, viewer: SessionMember, payload: Record<string, unknown>) {
@@ -687,9 +844,10 @@ export async function updateMemberProfile(targetId: string, viewer: SessionMembe
 
 type NotificationRow = {
   id: string;
-  problemId: string;
-  problemTitle: string;
-  problemShortCode: string;
+  targetType: "problem" | "playground";
+  targetId: string;
+  title: string;
+  shortCode: string;
   kind: string;
   summary: string;
   createdAt: string;
@@ -698,29 +856,42 @@ type NotificationRow = {
 
 export async function groupedNotifications(viewer: SessionMember) {
   await ensureDatabase();
-  const rows = await database()
-    .prepare(`SELECT n.id,n.problem_id AS problemId,p.title AS problemTitle,p.short_code AS problemShortCode,
+  const [problemRows, playgroundRows] = await Promise.all([
+    database().prepare(`SELECT n.id,'problem' AS targetType,n.problem_id AS targetId,p.title,p.short_code AS shortCode,
       n.kind,n.summary,n.created_at AS createdAt,n.read_at AS readAt
       FROM notifications n JOIN problems p ON p.id = n.problem_id
       WHERE n.member_id = ? AND (p.is_hidden = 0 OR ? IN ('admin', 'superadmin'))
-      ORDER BY n.created_at DESC LIMIT 100`)
-    .bind(viewer.id, viewer.role).all<NotificationRow>();
+      ORDER BY n.created_at DESC LIMIT 100`).bind(viewer.id, viewer.role).all<NotificationRow>(),
+    database().prepare(`SELECT n.id,'playground' AS targetType,n.post_id AS targetId,p.title,'游乐场' AS shortCode,
+      n.kind,n.summary,n.created_at AS createdAt,n.read_at AS readAt
+      FROM playground_notifications n JOIN playground_posts p ON p.id = n.post_id
+      WHERE n.member_id = ? AND (p.is_hidden = 0 OR ? IN ('admin', 'superadmin'))
+      ORDER BY n.created_at DESC LIMIT 100`).bind(viewer.id, viewer.role).all<NotificationRow>(),
+  ]);
+  const rows = [...problemRows.results, ...playgroundRows.results]
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, 100);
   const groups = new Map<string, {
-    problemId: string;
-    problemTitle: string;
-    problemShortCode: string;
+    targetType: "problem" | "playground";
+    targetId: string;
+    title: string;
+    shortCode: string;
+    href: string;
     latestSummary: string;
     latestAt: string;
     unreadCount: number;
     totalCount: number;
   }>();
-  for (const row of rows.results) {
-    const group = groups.get(row.problemId);
+  for (const row of rows) {
+    const groupKey = `${row.targetType}:${row.targetId}`;
+    const group = groups.get(groupKey);
     if (!group) {
-      groups.set(row.problemId, {
-        problemId: row.problemId,
-        problemTitle: row.problemTitle,
-        problemShortCode: row.problemShortCode,
+      groups.set(groupKey, {
+        targetType: row.targetType,
+        targetId: row.targetId,
+        title: row.title,
+        shortCode: row.shortCode,
+        href: row.targetType === "playground" ? `/playground/${row.targetId}` : `/problems/${row.targetId}`,
         latestSummary: row.summary,
         latestAt: row.createdAt,
         unreadCount: row.readAt ? 0 : 1,
@@ -739,4 +910,15 @@ export async function markProblemNotificationsRead(problemId: string, viewer: Se
   await ensureDatabase();
   await database().prepare("UPDATE notifications SET read_at = ? WHERE member_id = ? AND problem_id = ? AND read_at IS NULL")
     .bind(new Date().toISOString(), viewer.id, problemId).run();
+}
+
+export async function markNotificationGroupRead(targetType: string, targetId: string, viewer: SessionMember) {
+  await ensureDatabase();
+  const now = new Date().toISOString();
+  if (targetType === "playground") {
+    await database().prepare("UPDATE playground_notifications SET read_at = ? WHERE member_id = ? AND post_id = ? AND read_at IS NULL")
+      .bind(now, viewer.id, targetId).run();
+    return;
+  }
+  await markProblemNotificationsRead(targetId, viewer);
 }

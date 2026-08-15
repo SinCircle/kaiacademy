@@ -47,6 +47,7 @@ export async function ensureDatabase() {
         avatar_key TEXT,
         avatar_updated_at TEXT,
         invite_quota INTEGER NOT NULL DEFAULT 0,
+        api_enabled INTEGER NOT NULL DEFAULT 0,
         password_salt TEXT NOT NULL,
         password_hash TEXT NOT NULL,
         created_at TEXT NOT NULL
@@ -58,12 +59,21 @@ export async function ensureDatabase() {
         created_at TEXT NOT NULL,
         FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
       )`,
+      `CREATE TABLE IF NOT EXISTS daily_checkins (
+        id TEXT PRIMARY KEY NOT NULL,
+        member_id TEXT NOT NULL,
+        draw_date TEXT NOT NULL,
+        symbols TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+      )`,
       `CREATE TABLE IF NOT EXISTS invitation_codes (
         code TEXT PRIMARY KEY NOT NULL,
         created_by TEXT NOT NULL,
         used_by TEXT,
         created_at TEXT NOT NULL,
         used_at TEXT,
+        revoked_at TEXT,
         FOREIGN KEY (created_by) REFERENCES members(id) ON DELETE CASCADE,
         FOREIGN KEY (used_by) REFERENCES members(id) ON DELETE SET NULL
       )`,
@@ -79,6 +89,20 @@ export async function ensureDatabase() {
         expires_at TEXT NOT NULL,
         consumed_at TEXT,
         created_at TEXT NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS password_reset_codes (
+        id TEXT PRIMARY KEY NOT NULL,
+        member_id TEXT NOT NULL,
+        email TEXT NOT NULL,
+        code_salt TEXT NOT NULL,
+        code_hash TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        provider_id TEXT,
+        sent_at TEXT,
+        expires_at TEXT NOT NULL,
+        consumed_at TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
       )`,
       `CREATE TABLE IF NOT EXISTS problems (
         id TEXT PRIMARY KEY NOT NULL,
@@ -126,11 +150,29 @@ export async function ensureDatabase() {
         FOREIGN KEY (parent_id) REFERENCES messages(id) ON DELETE CASCADE,
         FOREIGN KEY (author_id) REFERENCES members(id) ON DELETE CASCADE
       )`,
+      `CREATE TABLE IF NOT EXISTS message_attachments (
+        id TEXT PRIMARY KEY NOT NULL,
+        message_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        storage_key TEXT NOT NULL UNIQUE,
+        byte_size INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+      )`,
       `CREATE TABLE IF NOT EXISTS message_votes (
         message_id TEXT NOT NULL,
         member_id TEXT NOT NULL,
         created_at TEXT NOT NULL,
         PRIMARY KEY (message_id, member_id),
+        FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+        FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS message_reactions (
+        message_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (message_id, member_id, emoji),
         FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
         FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
       )`,
@@ -140,6 +182,103 @@ export async function ensureDatabase() {
         viewed_at TEXT NOT NULL,
         PRIMARY KEY (problem_id, member_id),
         FOREIGN KEY (problem_id) REFERENCES problems(id) ON DELETE CASCADE,
+        FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS playground_posts (
+        id TEXT PRIMARY KEY NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        author_id TEXT NOT NULL,
+        is_hidden INTEGER NOT NULL DEFAULT 0,
+        is_pinned INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (author_id) REFERENCES members(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS playground_tags (
+        post_id TEXT NOT NULL,
+        tag TEXT NOT NULL,
+        PRIMARY KEY (post_id, tag),
+        FOREIGN KEY (post_id) REFERENCES playground_posts(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS playground_resources (
+        id TEXT PRIMARY KEY NOT NULL,
+        post_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        storage_key TEXT,
+        external_url TEXT,
+        mime_type TEXT,
+        byte_size INTEGER,
+        sha256 TEXT,
+        download_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (post_id) REFERENCES playground_posts(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS playground_post_votes (
+        post_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (post_id, member_id),
+        FOREIGN KEY (post_id) REFERENCES playground_posts(id) ON DELETE CASCADE,
+        FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS playground_bookmarks (
+        post_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (post_id, member_id),
+        FOREIGN KEY (post_id) REFERENCES playground_posts(id) ON DELETE CASCADE,
+        FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS playground_comments (
+        id TEXT PRIMARY KEY NOT NULL,
+        post_id TEXT NOT NULL,
+        parent_id TEXT,
+        author_id TEXT NOT NULL,
+        body TEXT NOT NULL,
+        marker TEXT,
+        is_featured INTEGER NOT NULL DEFAULT 0,
+        is_hidden INTEGER NOT NULL DEFAULT 0,
+        upvotes INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (post_id) REFERENCES playground_posts(id) ON DELETE CASCADE,
+        FOREIGN KEY (parent_id) REFERENCES playground_comments(id) ON DELETE CASCADE,
+        FOREIGN KEY (author_id) REFERENCES members(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS playground_comment_reactions (
+        comment_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (comment_id, member_id, emoji),
+        FOREIGN KEY (comment_id) REFERENCES playground_comments(id) ON DELETE CASCADE,
+        FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS playground_views (
+        post_id TEXT NOT NULL,
+        viewer_key TEXT NOT NULL,
+        window_started_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (post_id, viewer_key, window_started_at),
+        FOREIGN KEY (post_id) REFERENCES playground_posts(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS playground_interactions (
+        post_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        last_interacted_at TEXT NOT NULL,
+        PRIMARY KEY (post_id, member_id),
+        FOREIGN KEY (post_id) REFERENCES playground_posts(id) ON DELETE CASCADE,
+        FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS playground_comment_votes (
+        comment_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (comment_id, member_id),
+        FOREIGN KEY (comment_id) REFERENCES playground_comments(id) ON DELETE CASCADE,
         FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
       )`,
       `CREATE TABLE IF NOT EXISTS notifications (
@@ -153,6 +292,17 @@ export async function ensureDatabase() {
         FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE,
         FOREIGN KEY (problem_id) REFERENCES problems(id) ON DELETE CASCADE
       )`,
+      `CREATE TABLE IF NOT EXISTS playground_notifications (
+        id TEXT PRIMARY KEY NOT NULL,
+        member_id TEXT NOT NULL,
+        post_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        read_at TEXT,
+        FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE,
+        FOREIGN KEY (post_id) REFERENCES playground_posts(id) ON DELETE CASCADE
+      )`,
       `CREATE TABLE IF NOT EXISTS admin_audit_logs (
         id TEXT PRIMARY KEY NOT NULL,
         admin_id TEXT NOT NULL,
@@ -163,14 +313,91 @@ export async function ensureDatabase() {
         created_at TEXT NOT NULL,
         FOREIGN KEY (admin_id) REFERENCES members(id) ON DELETE RESTRICT
       )`,
+      `CREATE TABLE IF NOT EXISTS api_global_control (
+        id TEXT PRIMARY KEY NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        changed_by TEXT,
+        changed_at TEXT NOT NULL,
+        FOREIGN KEY (changed_by) REFERENCES members(id) ON DELETE SET NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS api_keys (
+        id TEXT PRIMARY KEY NOT NULL,
+        member_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        secret_hash TEXT NOT NULL,
+        encrypted_secret TEXT NOT NULL,
+        secret_iv TEXT NOT NULL,
+        secret_suffix TEXT NOT NULL,
+        permissions TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'active',
+        scope_violation_count INTEGER NOT NULL DEFAULT 0,
+        last_scope_violation_at TEXT,
+        isolated_at TEXT,
+        isolation_reason TEXT,
+        expires_at TEXT,
+        last_used_at TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS api_requests (
+        id TEXT PRIMARY KEY NOT NULL,
+        api_key_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        problem_id TEXT,
+        playground_post_id TEXT,
+        payload TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        result_id TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE,
+        FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE,
+        FOREIGN KEY (problem_id) REFERENCES problems(id) ON DELETE SET NULL,
+        FOREIGN KEY (playground_post_id) REFERENCES playground_posts(id) ON DELETE SET NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS api_staged_uploads (
+        id TEXT PRIMARY KEY NOT NULL,
+        api_key_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        request_id TEXT,
+        display_name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        storage_key TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        byte_size INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE,
+        FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE,
+        FOREIGN KEY (request_id) REFERENCES api_requests(id) ON DELETE SET NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS api_call_logs (
+        id TEXT PRIMARY KEY NOT NULL,
+        api_key_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        method TEXT NOT NULL,
+        path TEXT NOT NULL,
+        status_code INTEGER NOT NULL,
+        request_id TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE,
+        FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE,
+        FOREIGN KEY (request_id) REFERENCES api_requests(id) ON DELETE SET NULL
+      )`,
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_members_email ON members(email)",
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_members_username ON members(username)",
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_members_registration_invite_code ON members(registration_invite_code)",
       "CREATE INDEX IF NOT EXISTS idx_sessions_member_id ON sessions(member_id)",
       "CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_checkins_member_date ON daily_checkins(member_id, draw_date)",
+      "CREATE INDEX IF NOT EXISTS idx_daily_checkins_member_created ON daily_checkins(member_id, created_at)",
       "CREATE INDEX IF NOT EXISTS idx_invitation_codes_created_by ON invitation_codes(created_by)",
       "CREATE INDEX IF NOT EXISTS idx_email_verification_email_created ON email_verification_codes(email, created_at)",
       "CREATE INDEX IF NOT EXISTS idx_email_verification_invite_created ON email_verification_codes(invite_code, created_at)",
+      "CREATE INDEX IF NOT EXISTS idx_password_reset_email_created ON password_reset_codes(email, created_at)",
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_problems_short_code ON problems(short_code)",
       "CREATE INDEX IF NOT EXISTS idx_problems_status_updated_at ON problems(status, updated_at)",
       "CREATE INDEX IF NOT EXISTS idx_problems_creator_id ON problems(creator_id)",
@@ -179,15 +406,73 @@ export async function ensureDatabase() {
       "CREATE INDEX IF NOT EXISTS idx_problem_members_problem_relation ON problem_members(problem_id, relation)",
       "CREATE INDEX IF NOT EXISTS idx_messages_problem_parent ON messages(problem_id, parent_id)",
       "CREATE INDEX IF NOT EXISTS idx_messages_author_id ON messages(author_id)",
+      "CREATE INDEX IF NOT EXISTS idx_message_attachments_message_id ON message_attachments(message_id)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_message_attachments_storage_key ON message_attachments(storage_key)",
+      "CREATE INDEX IF NOT EXISTS idx_message_reactions_member_id ON message_reactions(member_id)",
       "CREATE INDEX IF NOT EXISTS idx_problem_views_member_viewed ON problem_views(member_id, viewed_at)",
+      "CREATE INDEX IF NOT EXISTS idx_playground_posts_updated_at ON playground_posts(updated_at)",
+      "CREATE INDEX IF NOT EXISTS idx_playground_posts_author_id ON playground_posts(author_id)",
+      "CREATE INDEX IF NOT EXISTS idx_playground_tags_tag ON playground_tags(tag)",
+      "CREATE INDEX IF NOT EXISTS idx_playground_resources_post_id ON playground_resources(post_id)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_playground_resources_storage_key ON playground_resources(storage_key)",
+      "CREATE INDEX IF NOT EXISTS idx_playground_bookmarks_member_id ON playground_bookmarks(member_id)",
+      "CREATE INDEX IF NOT EXISTS idx_playground_comments_post_parent ON playground_comments(post_id, parent_id)",
+      "CREATE INDEX IF NOT EXISTS idx_playground_comments_author_id ON playground_comments(author_id)",
+      "CREATE INDEX IF NOT EXISTS idx_playground_comment_reactions_member_id ON playground_comment_reactions(member_id)",
+      "CREATE INDEX IF NOT EXISTS idx_playground_views_post_id ON playground_views(post_id)",
+      "CREATE INDEX IF NOT EXISTS idx_playground_interactions_member_id ON playground_interactions(member_id)",
       "CREATE INDEX IF NOT EXISTS idx_notifications_member_read_created ON notifications(member_id, read_at, created_at)",
+      "CREATE INDEX IF NOT EXISTS idx_playground_notifications_member_read_created ON playground_notifications(member_id, read_at, created_at)",
       "CREATE INDEX IF NOT EXISTS idx_admin_audit_admin_created ON admin_audit_logs(admin_id, created_at)",
       "CREATE INDEX IF NOT EXISTS idx_admin_audit_target_created ON admin_audit_logs(target_type, target_id, created_at)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_secret_hash ON api_keys(secret_hash)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_member_name ON api_keys(member_id, name)",
+      "CREATE INDEX IF NOT EXISTS idx_api_keys_member_status ON api_keys(member_id, status)",
+      "CREATE INDEX IF NOT EXISTS idx_api_requests_member_status_created ON api_requests(member_id, status, created_at)",
+      "CREATE INDEX IF NOT EXISTS idx_api_requests_key_created ON api_requests(api_key_id, created_at)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_api_staged_uploads_storage_key ON api_staged_uploads(storage_key)",
+      "CREATE INDEX IF NOT EXISTS idx_api_staged_uploads_member_expires ON api_staged_uploads(member_id, expires_at)",
+      "CREATE INDEX IF NOT EXISTS idx_api_staged_uploads_request ON api_staged_uploads(request_id)",
+      "CREATE INDEX IF NOT EXISTS idx_api_call_logs_key_created ON api_call_logs(api_key_id, created_at)",
+      "CREATE INDEX IF NOT EXISTS idx_api_call_logs_member_created ON api_call_logs(member_id, created_at)",
+      `CREATE TRIGGER IF NOT EXISTS trg_member_registration_invite_quota
+        BEFORE INSERT ON members
+        WHEN NEW.registration_invite_code IS NOT NULL
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM invitation_codes invitation
+            JOIN members inviter ON inviter.id = invitation.created_by
+            WHERE invitation.code = NEW.registration_invite_code
+              AND invitation.used_by IS NULL
+              AND invitation.used_at IS NULL
+              AND invitation.revoked_at IS NULL
+              AND inviter.invite_quota > 0
+          ) THEN RAISE(ABORT, 'INVITATION_UNAVAILABLE') END;
+          UPDATE members SET invite_quota = invite_quota - 1
+          WHERE id = (SELECT created_by FROM invitation_codes WHERE code = NEW.registration_invite_code)
+            AND invite_quota > 0;
+        END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_invitation_generation_limit
+        BEFORE INSERT ON invitation_codes
+        WHEN NEW.used_by IS NULL AND NEW.used_at IS NULL AND NEW.revoked_at IS NULL
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM members inviter
+            WHERE inviter.id = NEW.created_by
+              AND inviter.invite_quota > (
+                SELECT COUNT(*) FROM invitation_codes existing
+                WHERE existing.created_by = NEW.created_by
+                  AND existing.used_by IS NULL
+                  AND existing.used_at IS NULL
+                  AND existing.revoked_at IS NULL
+              )
+          ) THEN RAISE(ABORT, 'INVITATION_LIMIT_REACHED') END;
+        END`,
     ];
 
-    const seedStatements: Array<[string, unknown[]]> = [
-      ["INSERT OR IGNORE INTO members (id,email,username,display_name,initials,bio,location,public_email,specialties,role,invite_quota,password_salt,password_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ["member-admin", "admin@example.com", "SinCircle", "SinCircle", "SC", "系统超级管理员。", "", "", JSON.stringify([]), "superadmin", 0, adminPasswordSalt, adminPasswordHash, "2026-08-11T10:45:00.000Z"]],
-      ["UPDATE members SET email = ?, username = ?, display_name = ?, initials = ?, bio = ?, role = 'superadmin', account_status = 'active', invite_quota = 10, password_salt = ?, password_hash = ? WHERE id = ?", ["admin@example.com", "SinCircle", "SinCircle", "SC", "系统超级管理员。", adminPasswordSalt, adminPasswordHash, "member-admin"]],
+    const bootstrapStatements: Array<[string, unknown[]]> = [
+      ["INSERT OR IGNORE INTO members (id,email,username,display_name,initials,bio,location,public_email,specialties,role,invite_quota,password_salt,password_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ["member-admin", "admin@example.com", "SinCircle", "SinCircle", "SC", "系统超级管理员。", "", "", JSON.stringify([]), "superadmin", 10, adminPasswordSalt, adminPasswordHash, "2026-08-11T10:45:00.000Z"]],
+      ["INSERT OR IGNORE INTO api_global_control (id,enabled,changed_by,changed_at) VALUES ('global',1,NULL,?)", ["2026-08-14T00:00:00.000Z"]],
       ["INSERT OR IGNORE INTO members (id,email,username,display_name,initials,bio,location,public_email,specialties,role,invite_quota,password_salt,password_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ["member-xu-wen", "xuwen@example.org", "xuwen", "许闻", "XW", "数论研究者，关注素数分布与丢番图方程中的初等方法。希望把复杂证明拆成可以独立验证的小步骤，也欢迎不同思路并行推进。", "上海", "xuwen@example.org", JSON.stringify(["解析数论", "初等数论", "丢番图方程"]), "superadmin", 3, bootstrapPasswordSalt, bootstrapPasswordHash, "2025-03-12T08:00:00.000Z"]],
       ["INSERT OR IGNORE INTO members (id,email,username,display_name,initials,bio,location,public_email,specialties,role,invite_quota,password_salt,password_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ["member-lin-cheng", "lincheng@example.org", "lincheng", "林澄", "LC", "研究代数数论与有限域方法。", "北京", "", JSON.stringify(["代数数论", "有限域"]), "member", 0, bootstrapPasswordSalt, bootstrapPasswordHash, "2025-05-20T08:00:00.000Z"]],
       ["INSERT OR IGNORE INTO members (id,email,username,display_name,initials,bio,location,public_email,specialties,role,invite_quota,password_salt,password_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ["member-chen-yu", "chenyu@example.org", "chenyu", "陈屿", "CY", "关注初等数论中的可计算方法。", "南京", "", JSON.stringify(["初等数论"]), "member", 0, bootstrapPasswordSalt, bootstrapPasswordHash, "2025-07-02T08:00:00.000Z"]],
@@ -198,7 +483,6 @@ export async function ensureDatabase() {
       ["INSERT OR IGNORE INTO members (id,email,username,display_name,initials,bio,location,public_email,specialties,role,invite_quota,password_salt,password_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ["member-gu-yao", "guyao@example.org", "guyao", "顾遥", "GY", "", "", "", JSON.stringify(["组合数学"]), "member", 0, bootstrapPasswordSalt, bootstrapPasswordHash, "2025-10-12T08:00:00.000Z"]],
       ["INSERT OR IGNORE INTO members (id,email,username,display_name,initials,bio,location,public_email,specialties,role,invite_quota,password_salt,password_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ["member-wu-qi", "wuqi@example.org", "wuqi", "吴琦", "WQ", "", "", "", JSON.stringify(["代数"]), "member", 0, bootstrapPasswordSalt, bootstrapPasswordHash, "2025-11-03T08:00:00.000Z"]],
       ["UPDATE members SET role = 'member', account_status = 'suspended' WHERE id != 'member-admin' AND email LIKE '%@example.org'", []],
-      ["INSERT OR IGNORE INTO invitation_codes (code,created_by,used_by,created_at,used_at) VALUES (?,?,?,?,?)", ["MATH-DEMO", "member-xu-wen", null, "2026-08-10T08:00:00.000Z", null]],
       ["INSERT OR IGNORE INTO problems (id,short_code,title,body,background,status,creator_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)", ["problem-0184", "P-0184", "平方数相邻差的素因子结构", "设 $n>1$ 为整数。研究相邻两个平方数之差中出现的素因子，并证明下述命题。\n\n$$n^2-1=(n-1)(n+1)$$\n\n是否存在绝对常数 $C$，使得对任意充分大的 $n$，$n^2-1$ 至少含有一个大于 $C\\log n$ 的素因子？\n\n允许使用初等解析数论中的标准结论；若使用更强结果，需明确指出依赖。", "问题来自对相邻平方差因子结构的研究。目前已完成基本分拆，尚缺小素因子高次幂的统一估计。", "开放", "member-xu-wen", "2026-08-03T08:00:00.000Z", "2026-08-11T08:24:00.000Z"]],
       ["INSERT OR IGNORE INTO problems (id,short_code,title,body,background,status,creator_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)", ["problem-0172", "P-0172", "有限域上椭圆曲线的点数估计", "设 $E/\\mathbb{F}_q$ 为椭圆曲线。尝试在明确记录所用工具的前提下，整理 $\\#E(\\mathbb{F}_q)$ 的初等估计路径。", "希望比较初等计数方法与标准估计之间的差距，并单列小特征情形。", "开放", "member-lin-cheng", "2026-07-28T08:00:00.000Z", "2026-08-10T06:30:00.000Z"]],
       ["INSERT OR IGNORE INTO problems (id,short_code,title,body,background,status,creator_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)", ["problem-0165", "P-0165", "随机图中局部稀疏与整体连通性的阈值", "研究随机图中局部稀疏约束与全局连通概率之间的关系，并确定临界区间的宽度。", "当前数值实验显示两个阈值可能在主项上重合。", "开放", "member-gu-yao", "2026-07-19T08:00:00.000Z", "2026-08-08T03:20:00.000Z"]],
@@ -240,6 +524,10 @@ export async function ensureDatabase() {
       ["INSERT OR IGNORE INTO notifications (id,member_id,problem_id,kind,summary,created_at,read_at) VALUES (?,?,?,?,?,?,?)", ["notification-3", "member-xu-wen", "problem-0172", "status", "问题状态更新为开放", "2026-08-10T06:30:00.000Z", null]],
     ];
 
+    // Production bootstrap intentionally keeps only the canonical superadmin.
+    // Historical fixtures stay inert here so existing development references remain readable.
+    const seedStatements = bootstrapStatements.slice(0, 2);
+
     initialization = (async () => {
       const tableStatements = schemaStatements.filter((sql) => sql.startsWith("CREATE TABLE"));
       const indexStatements = schemaStatements.filter((sql) => !sql.startsWith("CREATE TABLE"));
@@ -247,16 +535,25 @@ export async function ensureDatabase() {
       // The design prototype used a smaller `problems` table. Upgrade it in place so
       // existing local and hosted D1 databases remain usable after the formal rebuild.
       await db.batch(tableStatements.map((sql) => db.prepare(sql)));
-      const [problemColumns, memberColumns, messageColumns] = await Promise.all([
+      const [problemColumns, memberColumns, messageColumns, invitationColumns, playgroundCommentColumns, apiKeyColumns, apiRequestColumns] = await Promise.all([
         db.prepare("PRAGMA table_info(problems)").all<{ name: string }>(),
         db.prepare("PRAGMA table_info(members)").all<{ name: string }>(),
         db.prepare("PRAGMA table_info(messages)").all<{ name: string }>(),
+        db.prepare("PRAGMA table_info(invitation_codes)").all<{ name: string }>(),
+        db.prepare("PRAGMA table_info(playground_comments)").all<{ name: string }>(),
+        db.prepare("PRAGMA table_info(api_keys)").all<{ name: string }>(),
+        db.prepare("PRAGMA table_info(api_requests)").all<{ name: string }>(),
       ]);
       const columnNames = new Set(problemColumns.results.map((column) => column.name));
       const memberColumnNames = new Set(memberColumns.results.map((column) => column.name));
       const messageColumnNames = new Set(messageColumns.results.map((column) => column.name));
+      const invitationColumnNames = new Set(invitationColumns.results.map((column) => column.name));
+      const playgroundCommentColumnNames = new Set(playgroundCommentColumns.results.map((column) => column.name));
+      const apiKeyColumnNames = new Set(apiKeyColumns.results.map((column) => column.name));
+      const apiRequestColumnNames = new Set(apiRequestColumns.results.map((column) => column.name));
       const legacyUpgrades: string[] = [];
       const addedLegacyProblemIdentity = !columnNames.has("short_code");
+      const addedInvitationRevocation = !invitationColumnNames.has("revoked_at");
       if (!columnNames.has("short_code")) {
         legacyUpgrades.push("ALTER TABLE problems ADD COLUMN short_code TEXT NOT NULL DEFAULT ''");
       }
@@ -284,8 +581,35 @@ export async function ensureDatabase() {
       if (!memberColumnNames.has("avatar_updated_at")) {
         legacyUpgrades.push("ALTER TABLE members ADD COLUMN avatar_updated_at TEXT");
       }
+      if (!memberColumnNames.has("api_enabled")) {
+        legacyUpgrades.push("ALTER TABLE members ADD COLUMN api_enabled INTEGER NOT NULL DEFAULT 0");
+      }
       if (!messageColumnNames.has("is_hidden")) {
         legacyUpgrades.push("ALTER TABLE messages ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0");
+      }
+      if (addedInvitationRevocation) {
+        legacyUpgrades.push("ALTER TABLE invitation_codes ADD COLUMN revoked_at TEXT");
+      }
+      if (!playgroundCommentColumnNames.has("marker")) {
+        legacyUpgrades.push("ALTER TABLE playground_comments ADD COLUMN marker TEXT");
+      }
+      if (!playgroundCommentColumnNames.has("is_featured")) {
+        legacyUpgrades.push("ALTER TABLE playground_comments ADD COLUMN is_featured INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!apiKeyColumnNames.has("scope_violation_count")) {
+        legacyUpgrades.push("ALTER TABLE api_keys ADD COLUMN scope_violation_count INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!apiKeyColumnNames.has("last_scope_violation_at")) {
+        legacyUpgrades.push("ALTER TABLE api_keys ADD COLUMN last_scope_violation_at TEXT");
+      }
+      if (!apiKeyColumnNames.has("isolated_at")) {
+        legacyUpgrades.push("ALTER TABLE api_keys ADD COLUMN isolated_at TEXT");
+      }
+      if (!apiKeyColumnNames.has("isolation_reason")) {
+        legacyUpgrades.push("ALTER TABLE api_keys ADD COLUMN isolation_reason TEXT");
+      }
+      if (!apiRequestColumnNames.has("playground_post_id")) {
+        legacyUpgrades.push("ALTER TABLE api_requests ADD COLUMN playground_post_id TEXT REFERENCES playground_posts(id) ON DELETE SET NULL");
       }
       if (legacyUpgrades.length) {
         await db.batch(legacyUpgrades.map((sql) => db.prepare(sql)));
@@ -295,7 +619,19 @@ export async function ensureDatabase() {
             db.prepare("UPDATE problems SET updated_at = created_at WHERE updated_at = ''"),
           ]);
         }
+        if (addedInvitationRevocation) {
+          await db.prepare(`UPDATE members SET invite_quota = invite_quota + (
+            SELECT COUNT(*) FROM invitation_codes
+            WHERE created_by = members.id AND used_by IS NULL AND used_at IS NULL
+          )`).run();
+        }
       }
+
+      await db.batch([
+        db.prepare(`INSERT OR IGNORE INTO playground_comment_reactions (comment_id,member_id,emoji,created_at)
+          SELECT id,author_id,marker,updated_at FROM playground_comments WHERE marker IS NOT NULL AND marker <> ''`),
+        db.prepare("UPDATE playground_comments SET marker = NULL WHERE marker IS NOT NULL"),
+      ]);
 
       await db.batch([
         ...indexStatements.map((sql) => db.prepare(sql)),

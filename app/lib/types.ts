@@ -8,6 +8,9 @@ export type SessionMember = {
   accountStatus: "active" | "suspended";
   avatarUpdatedAt: string | null;
   inviteQuota: number;
+  apiEnabled: boolean;
+  apiQualified: boolean;
+  createdAt: string;
 };
 
 export type ProblemCard = {
@@ -58,7 +61,9 @@ export type DiscussionMessage = {
   authorUsername: string;
   authorInitials: string;
   authorAvatarUpdatedAt: string | null;
+  reactions: import("./playground").PlaygroundCommentReaction[];
   isVoted: boolean;
+  canLabel: boolean;
   canHide: boolean;
   canDelete: boolean;
 };

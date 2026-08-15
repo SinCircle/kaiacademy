@@ -21,7 +21,7 @@ export type MediaObject = {
 
 type MediaBucket = {
   get(key: string): Promise<MediaObject | null>;
-  put(key: string, value: ArrayBuffer, options?: {
+  put(key: string, value: ArrayBuffer | ReadableStream, options?: {
     httpMetadata?: { contentType?: string; cacheControl?: string };
     customMetadata?: Record<string, string>;
   }): Promise<unknown>;
@@ -35,7 +35,7 @@ type MediaEnvironment = {
 
 export function mediaBucket() {
   const bucket = (env as unknown as MediaEnvironment).MEDIA;
-  if (!bucket) throw new AppError("头像存储尚未配置", 503);
+  if (!bucket) throw new AppError("媒体存储尚未配置", 503);
   return bucket;
 }
 

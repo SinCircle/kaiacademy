@@ -3,6 +3,9 @@ import { headers } from "next/headers";
 import type { ReactNode } from "react";
 import "katex/dist/katex.min.css";
 import "./globals.css";
+import { CacheSync } from "./components/CacheSync";
+import { SessionProvider } from "./hooks/useSession";
+import { currentMember } from "../db/auth";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
@@ -39,6 +42,11 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-export default function RootLayout({ children }: { children: ReactNode }) {
-  return <html lang="zh-CN"><body>{children}</body></html>;
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const requestHeaders = await headers();
+  const initialMember = await currentMember(new Request("http://localhost/", {
+    headers: { cookie: requestHeaders.get("cookie") ?? "" },
+  }));
+
+  return <html lang="zh-CN"><body><SessionProvider initialMember={initialMember}><CacheSync />{children}<footer className="site-footer"><span>© 2026 丐院</span><span>共同推进尚未解决的数学问题</span></footer></SessionProvider></body></html>;
 }

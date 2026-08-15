@@ -6,6 +6,16 @@ design
 dist
 node_modules
 work
+.codex-*.log
 npm-debug.log*
 .env*
 .dev.vars*
+*.pem
+*.key
+*.crt
+*.cer
+*.pfx
+*.p12
+*_nginx
+*_nginx.zip
+verify mail key.txt

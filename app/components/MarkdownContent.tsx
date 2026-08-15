@@ -13,7 +13,8 @@ export function MarkdownContent({ className, compact = false, source }: { classN
         } : {
           a: ({ children, href }) => {
             const external = Boolean(href && /^https?:\/\//i.test(href));
-            return <a href={href} rel={external ? "noreferrer" : undefined} target={external ? "_blank" : undefined}>{children}</a>;
+            const attachment = Boolean(href?.startsWith("/api/attachments/"));
+            return <a className={attachment ? "message-attachment-link" : undefined} download={attachment || undefined} href={href} rel={external ? "noreferrer" : undefined} target={external ? "_blank" : undefined}>{children}</a>;
           },
         }}
         rehypePlugins={[[rehypeKatex, { strict: "ignore", throwOnError: false, trust: false }]]}
@@ -24,4 +25,3 @@ export function MarkdownContent({ className, compact = false, source }: { classN
     </div>
   );
 }
-

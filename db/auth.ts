@@ -20,6 +20,9 @@ type MemberRow = {
   accountStatus: "active" | "suspended";
   avatarUpdatedAt: string | null;
   inviteQuota: number;
+  apiEnabled: number | boolean;
+  apiQualified: number | boolean;
+  createdAt: string;
   passwordSalt?: string;
   passwordHash?: string;
 };
@@ -60,6 +63,9 @@ function memberFromRow(row: MemberRow): SessionMember {
     accountStatus: row.accountStatus,
     avatarUpdatedAt: row.avatarUpdatedAt,
     inviteQuota: Number(row.inviteQuota),
+    apiEnabled: Boolean(row.apiEnabled),
+    apiQualified: Boolean(row.apiQualified),
+    createdAt: row.createdAt,
   };
 }
 
@@ -78,6 +84,9 @@ export async function currentMember(request: Request): Promise<SessionMember | n
       m.account_status AS accountStatus,
       m.avatar_updated_at AS avatarUpdatedAt,
       m.invite_quota AS inviteQuota
+      ,m.api_enabled AS apiEnabled
+      ,EXISTS(SELECT 1 FROM messages api_message WHERE api_message.author_id = m.id) AS apiQualified
+      ,m.created_at AS createdAt
     FROM sessions s
     JOIN members m ON m.id = s.member_id
     WHERE s.id = ? AND s.expires_at > ? AND m.account_status = 'active'`)
@@ -123,6 +132,9 @@ export async function login(input: { email: unknown; password: unknown; remember
       account_status AS accountStatus,
       avatar_updated_at AS avatarUpdatedAt,
       invite_quota AS inviteQuota,
+      api_enabled AS apiEnabled,
+      EXISTS(SELECT 1 FROM messages api_message WHERE api_message.author_id = members.id) AS apiQualified,
+      created_at AS createdAt,
       password_salt AS passwordSalt,
       password_hash AS passwordHash
     FROM members WHERE email = ?`)
@@ -173,10 +185,13 @@ export async function register(input: Record<string, unknown>) {
 
   const db = database();
   const invitation = await db
-    .prepare("SELECT code FROM invitation_codes WHERE code = ? AND used_by IS NULL")
+    .prepare(`SELECT invitation.code FROM invitation_codes invitation
+      JOIN members inviter ON inviter.id = invitation.created_by
+      WHERE invitation.code = ? AND invitation.used_by IS NULL AND invitation.used_at IS NULL
+        AND invitation.revoked_at IS NULL AND inviter.invite_quota > 0`)
     .bind(inviteCode)
     .first<{ code: string }>();
-  if (!invitation) throw new AuthError("邀请码无效或已被使用");
+  if (!invitation) throw new AuthError("邀请码无效、已被使用、已作废或邀请名额已用完");
   const duplicate = await db
     .prepare("SELECT id FROM members WHERE email = ? OR username = ?")
     .bind(email, username)
@@ -194,12 +209,16 @@ export async function register(input: Record<string, unknown>) {
         id,email,username,display_name,initials,bio,location,public_email,specialties,role,account_status,registration_invite_code,invite_quota,password_salt,password_hash,created_at
       ) VALUES (?, ?, ?, ?, ?, '', '', '', '[]', 'member', 'active', ?, 0, ?, ?, ?)`)
         .bind(memberId, email, username, username, initialsFor(username), inviteCode, salt, hash, createdAt),
-      db.prepare("UPDATE invitation_codes SET used_by = ?, used_at = ? WHERE code = ? AND used_by IS NULL")
+      db.prepare(`UPDATE invitation_codes SET used_by = ?, used_at = ?
+        WHERE code = ? AND used_by IS NULL AND used_at IS NULL AND revoked_at IS NULL`)
         .bind(memberId, createdAt, inviteCode),
       db.prepare("UPDATE email_verification_codes SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL")
         .bind(createdAt, verification.id),
     ]);
   } catch (error) {
+    if (error instanceof Error && /INVITATION_UNAVAILABLE/i.test(error.message)) {
+      throw new AuthError("邀请码无效、已被使用、已作废或邀请名额已用完", 409);
+    }
     if (error instanceof Error && /UNIQUE|constraint/i.test(error.message)) {
       throw new AuthError("邮箱、用户名或邀请码已经被使用", 409);
     }

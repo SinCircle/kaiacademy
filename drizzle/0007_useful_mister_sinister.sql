@@ -1,0 +1,1 @@
+ALTER TABLE `playground_comments` ADD `marker` text;

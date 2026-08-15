@@ -1,12 +1,14 @@
 "use client";
 
-import Link from "next/link";
+import { AppLink as Link } from "./AppLink";
 import { ArrowUpRight, CalendarDays, Clock3, Plus, Search, SlidersHorizontal } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useSession } from "../hooks/useSession";
 import { fullDate, relativeTime } from "../lib/format";
 import type { ProblemCard } from "../lib/types";
+import { getCachedJson } from "../lib/client-cache";
 import { MarkdownContent } from "./MarkdownContent";
+import { MarkdownTitle } from "./MarkdownTitle";
 import { MemberAvatar } from "./MemberAvatar";
 import { SiteHeader } from "./SiteHeader";
 
@@ -30,9 +32,14 @@ export function ProblemsScreen() {
     const initial = new URLSearchParams(window.location.search).get("q") ?? "";
     setQuery(initial);
     setAppliedQuery(initial);
+    const problemUrl = `/api/problems?q=${encodeURIComponent(initial)}`;
     Promise.all([
-      fetch(`/api/problems?q=${encodeURIComponent(initial)}`).then((response) => response.json() as Promise<{ problems?: ProblemCard[]; message?: string }>),
-      fetch("/api/tags").then((response) => response.json() as Promise<{ tags?: string[] }>),
+      getCachedJson<{ problems?: ProblemCard[]; message?: string }>(problemUrl, {
+        onUpdate: (data) => setProblems(data.problems ?? []),
+      }),
+      getCachedJson<{ tags?: string[] }>("/api/tags", {
+        onUpdate: (data) => setKnownTags(data.tags ?? []),
+      }),
     ]).then(([problemData, tagData]) => {
       setProblems(problemData.problems ?? []);
       setKnownTags(tagData.tags ?? []);
@@ -122,12 +129,17 @@ export function ProblemsScreen() {
               <Link className="problem-result" href={href} key={problem.id}>
                 <div>
                   <p><code>{problem.shortCode}</code>{problem.isPinned && <b className="pinned-label">置顶</b>}<span>{problem.tags.join(" · ") || "未标记"}</span></p>
-                  <h2>{problem.title}</h2>
+                  <h2><MarkdownTitle source={problem.title} /></h2>
                   <MarkdownContent className="result-summary" compact source={problem.summary} />
                   <footer><span><CalendarDays aria-hidden="true" size={13} />创建于 {fullDate(problem.createdAt)}</span><span><Clock3 aria-hidden="true" size={13} />{relativeTime(problem.updatedAt)}推进</span></footer>
                 </div>
-                {problem.status === "开放" ? <span className="result-status"><i />开放</span> : <span />}
-                <span className="result-avatars">{problem.participantAvatars.map((person) => <MemberAvatar avatarUpdatedAt={person.avatarUpdatedAt} className="result-avatar" initials={person.initials} key={person.id} memberId={person.id} />)}</span>
+                <span className="result-meta-stack">
+                  {problem.status === "开放" ? <span className="result-status"><i />开放</span> : <span aria-hidden="true" className="result-status-spacer" />}
+                  <span className="result-avatars">
+                    <span aria-hidden="true" className="result-avatar-stack">{problem.participantAvatars.map((person) => <MemberAvatar avatarUpdatedAt={person.avatarUpdatedAt} className="result-avatar" initials={person.initials} key={person.id} memberId={person.id} />)}</span>
+                    <small className="result-participant-count">{problem.participantCount} 人参与</small>
+                  </span>
+                </span>
                 <ArrowUpRight aria-hidden="true" size={16} />
               </Link>
             );

@@ -1,9 +1,9 @@
 import { listTags } from "../../../db/queries";
-import { apiError } from "../_shared";
+import { apiError, cachedJsonResponse } from "../_shared";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    return Response.json({ tags: await listTags() });
+    return cachedJsonResponse(request, { tags: await listTags() });
   } catch (error) {
     return apiError(error, "暂时无法读取标签");
   }

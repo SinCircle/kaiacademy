@@ -17,6 +17,7 @@ docker compose up --build
 ```dotenv
 RESEND_API_KEY=re_xxxxxxxxx
 EMAIL_FROM=丐院 <verify@your-verified-domain.example>
+API_KEY_ENCRYPTION_SECRET=至少32位的随机字符串
 ```
 
 Docker Compose 会在启动时读取它，密钥不会写入镜像。也可以复制 `.dev.vars.example` 后填写。当前 Docker 配置要求该文件真实存在，健康检查也会同时验证邮件配置、头像压缩和头像存储，避免应用启动后才发现关键服务未接通。注册只接受 `mails.ucas.ac.cn`、`gmail.com`、`outlook.com`、`qq.com` 与 `163.com` 邮箱；系统会先验证邀请码，邀请码无效时不会调用邮件服务。
@@ -66,6 +67,12 @@ npm run start
 
 头像上传接受不超过 10 MB 的图片；浏览器框选确认后，服务端会再次压缩成约 100 KB 的 WebP 并写入 `MEDIA` 对象存储。
 
+## API 协同
+
+成员在“难题”板块发表过至少一条讨论后，可以在个人页启用 API。顶部随后显示独立 API 模块，用于创建 Key、管理最小权限、查看调用历史以及批准或拒绝写入请求。API 只开放难题读取、创建难题、修改本人创建的难题和添加顶层讨论；所有写入均先进入本人审阅区，不能通过 API 回复已有讨论，也不能访问游乐场、个人资料或消息功能。
+
+每个 Key 可以在重新验证账户密码后单独下载包含完整凭据的 `SKILL.md`。完整 Key 以加密形式保存，摘要用于调用认证；`API_KEY_ENCRYPTION_SECRET` 必须稳定保管，更换后旧 Key 将无法再次下载。
+
 这是仓库内预设的演示引导数据。注册邀请码为 `MATH-DEMO`（占位符，部署前应替换为随机邀请码）；新成员的默认邀请额度为 0。示例内容作者账号已停用，不能用已知演示密码登录。
 
 ## 项目结构
@@ -75,4 +82,4 @@ npm run start
 - `drizzle/`：正式数据库迁移
 - `design/decisions.md`：最终设计目的、哲学与产品决策
 - `design/prototype/`：设计阶段归档，不进入 Docker 镜像
-- `worker/`：Cloudflare Worker 运行入口
+- `worker/`：Cloudflare 兼容运行入口
