@@ -5,14 +5,15 @@ import { ArrowUpRight, CalendarDays, Clock3, Plus, Search, SlidersHorizontal } f
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useSession } from "../hooks/useSession";
 import { fullDate, relativeTime } from "../lib/format";
+import { attentionCountOptions, matchesAttentionCount } from "../lib/problem-filters";
 import type { ProblemCard } from "../lib/types";
 import { getCachedJson } from "../lib/client-cache";
 import { MarkdownContent } from "./MarkdownContent";
 import { MarkdownTitle } from "./MarkdownTitle";
-import { MemberAvatar } from "./MemberAvatar";
+import { MemberAvatarStack } from "./MemberAvatar";
 import { SiteHeader } from "./SiteHeader";
 
-type Filters = { tags: string[]; statuses: string[]; relations: string[]; updated: string[] };
+type Filters = { tags: string[]; statuses: string[]; relations: string[]; updated: string[]; attention: string[] };
 
 const relationLabels: Record<string, string> = { watching: "旁观", following: "关注", participating: "参与" };
 const updatedLabels: Record<string, string> = { "1d": "24 小时内", "7d": "7 天内", "30d": "30 天内" };
@@ -21,7 +22,7 @@ export function ProblemsScreen() {
   const { member } = useSession();
   const [query, setQuery] = useState("");
   const [appliedQuery, setAppliedQuery] = useState("");
-  const [filters, setFilters] = useState<Filters>({ tags: [], statuses: [], relations: [], updated: [] });
+  const [filters, setFilters] = useState<Filters>({ tags: [], statuses: [], relations: [], updated: [], attention: [] });
   const [problems, setProblems] = useState<ProblemCard[]>([]);
   const [knownTags, setKnownTags] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,6 +54,7 @@ export function ProblemsScreen() {
     if (filters.tags.length && !filters.tags.some((tag) => problem.tags.includes(tag))) return false;
     if (filters.statuses.length && !filters.statuses.includes(problem.status)) return false;
     if (filters.relations.length && !filters.relations.includes(problem.viewerRelation)) return false;
+    if (filters.attention.length && !filters.attention.some((range) => matchesAttentionCount(problem.attentionCount ?? 0, range))) return false;
     if (filters.updated.length) {
       const age = (now - new Date(problem.updatedAt).getTime()) / 86_400_000;
       if (!filters.updated.some((value) => value === "1d" ? age <= 1 : value === "7d" ? age <= 7 : age <= 30)) return false;
@@ -64,7 +66,7 @@ export function ProblemsScreen() {
     setFilters((current) => ({
       ...current,
       [group]: group === "updated"
-        ? (current.updated.includes(value) ? [] : [value])
+        ? (current[group].includes(value) ? [] : [value])
         : current[group].includes(value) ? current[group].filter((item) => item !== value) : [...current[group], value],
     }));
   }
@@ -77,10 +79,11 @@ export function ProblemsScreen() {
   }
 
   const groups: Array<{ key: keyof Filters; label: string; options: Array<{ value: string; label: string }> }> = [
-    { key: "tags", label: "标签", options: knownTags.slice(0, 10).map((tag) => ({ value: tag, label: tag })) },
     { key: "statuses", label: "状态", options: ["开放", "已解决"].map((value) => ({ value, label: value })) },
     { key: "relations", label: "参与", options: Object.entries(relationLabels).map(([value, label]) => ({ value, label })) },
     { key: "updated", label: "推进时间", options: Object.entries(updatedLabels).map(([value, label]) => ({ value, label })) },
+    { key: "attention", label: "关注情况", options: [...attentionCountOptions] },
+    { key: "tags", label: "标签", options: knownTags.map((tag) => ({ value: tag, label: tag })) },
   ];
 
   return (
@@ -101,21 +104,23 @@ export function ProblemsScreen() {
           <summary><span><SlidersHorizontal aria-hidden="true" size={15} />筛选</span><span>{loading ? "读取中…" : `${visible.length} 个结果`}</span></summary>
           <div className="filter-grid">
             {groups.map((group) => (
-              <fieldset key={group.key}>
+              <fieldset className={`filter-group filter-group-${group.key}`} key={group.key}>
                 <legend>{group.label}</legend>
-                <div>{group.options.map((option) => (
-                  <label key={option.value}><input
-                    checked={filters[group.key].includes(option.value)}
-                    name={group.key === "updated" ? "updated-window" : undefined}
+                <div>{group.options.map((option) => {
+                  const singleSelect = group.key === "updated";
+                  const selected = filters[group.key].includes(option.value);
+                  return <label key={option.value}><input
+                    checked={selected}
+                    name={singleSelect ? `${group.key}-filter` : undefined}
                     onChange={() => {
-                      if (group.key !== "updated" || !filters.updated.includes(option.value)) toggle(group.key, option.value);
+                      if (!singleSelect || !selected) toggle(group.key, option.value);
                     }}
                     onClick={() => {
-                      if (group.key === "updated" && filters.updated.includes(option.value)) toggle(group.key, option.value);
+                      if (singleSelect && selected) toggle(group.key, option.value);
                     }}
-                    type={group.key === "updated" ? "radio" : "checkbox"}
-                  /><span>{option.label}</span></label>
-                ))}</div>
+                    type={singleSelect ? "radio" : "checkbox"}
+                  /><span>{option.label}</span></label>;
+                })}</div>
               </fieldset>
             ))}
           </div>
@@ -135,10 +140,7 @@ export function ProblemsScreen() {
                 </div>
                 <span className="result-meta-stack">
                   {problem.status === "开放" ? <span className="result-status"><i />开放</span> : <span aria-hidden="true" className="result-status-spacer" />}
-                  <span className="result-avatars">
-                    <span aria-hidden="true" className="result-avatar-stack">{problem.participantAvatars.map((person) => <MemberAvatar avatarUpdatedAt={person.avatarUpdatedAt} className="result-avatar" initials={person.initials} key={person.id} memberId={person.id} />)}</span>
-                    <small className="result-participant-count">{problem.participantCount} 人参与</small>
-                  </span>
+                  <MemberAvatarStack label="人参与" people={problem.participantAvatars} total={problem.participantCount} variant="result" />
                 </span>
                 <ArrowUpRight aria-hidden="true" size={16} />
               </Link>

@@ -101,10 +101,14 @@ export function DailyCheckin({ memberId, readOnly = false }: { memberId?: string
     setPhase("loading");
     setError("");
     const applyResult = (result: CheckinData) => {
-      if (!controller.signal.aborted) {
-        setRecent(result.recent);
-        setPhase(readOnly || result.today ? "calendar" : "idle");
-      }
+      if (controller.signal.aborted) return;
+      // The POST publishes a real-time cache invalidation before its response
+      // reaches this component. Do not let that background refresh interrupt an
+      // in-flight lever/reel sequence; the POST result below owns the transition
+      // until the final reel has stayed still for one second.
+      if (phaseRef.current === "pulling" || phaseRef.current === "spinning" || phaseRef.current === "waiting") return;
+      setRecent(result.recent);
+      setPhase(readOnly || result.today ? "calendar" : "idle");
     };
     getCachedJson<CheckinData>(cacheUrl, { onUpdate: applyResult, revalidate: false })
       .then(applyResult)

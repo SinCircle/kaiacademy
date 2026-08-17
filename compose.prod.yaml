@@ -1,6 +1,20 @@
 name: gaiyuan-production
 
 services:
+  sync:
+    image: node:22.14-bookworm-slim
+    command: ["node", "/srv/sync-server.mjs"]
+    restart: unless-stopped
+    expose:
+      - "3001"
+    volumes:
+      - ./sync-server.mjs:/srv/sync-server.mjs:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   web:
     build:
       context: .
@@ -9,8 +23,8 @@ services:
       - path: ./.dev.vars
         required: true
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     environment:
       NODE_ENV: production
       PORT: "3000"
@@ -18,6 +32,9 @@ services:
       WRANGLER_LOG_PATH: /app/.wrangler/logs
       MINIFLARE_REGISTRY_PATH: /app/.wrangler/registry
       CLOUDFLARE_INCLUDE_PROCESS_ENV: "true"
+      RESEND_API_ENDPOINT: http://caddy:8080/emails
+      SYNC_PUBLISH_URL: http://sync:3001/invalidate
+      SYNC_STREAM_URL: http://sync:3001/api/sync
     volumes:
       - d1_data:/app/.wrangler
     healthcheck:
@@ -27,5 +44,53 @@ services:
       retries: 8
       start_period: 20s
 
+  api-worker:
+    build:
+      context: .
+      target: production
+    command: ["npx", "wrangler", "dev", "--config", "wrangler.api.jsonc", "--ip", "0.0.0.0", "--port", "3002", "--persist-to", ".wrangler", "--show-interactive-dev-session=false"]
+    restart: unless-stopped
+    env_file:
+      - path: ./.dev.vars
+        required: true
+    expose:
+      - "3002"
+    environment:
+      WRANGLER_WRITE_LOGS: "false"
+      WRANGLER_LOG_PATH: /app/.wrangler/api-logs
+      MINIFLARE_REGISTRY_PATH: /app/.wrangler/api-registry
+      CLOUDFLARE_INCLUDE_PROCESS_ENV: "true"
+      SYNC_PUBLISH_URL: http://sync:3001/invalidate
+    volumes:
+      - d1_data:/app/.wrangler
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health').then(r=>{if(r.status!==204)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+      sync:
+        condition: service_healthy
+      api-worker:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs/kaiacademy.top_bundle.crt:/etc/caddy/certs/kaiacademy.top_bundle.crt:ro
+      - ./certs/kaiacademy.top.key:/etc/caddy/certs/kaiacademy.top.key:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   d1_data:
+  caddy_data:
+  caddy_config:

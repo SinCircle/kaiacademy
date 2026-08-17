@@ -156,7 +156,7 @@ description: 使用丐院 API 读取难题与游乐场，并按获准权限提�
 - \`X-Content-SHA256\`：文件实际内容的 64 位小写十六进制 SHA-256。
 - \`X-File-Description\`：可选，经过 URL 编码，最多 240 字。
 
-上传成功返回 \`uploadId\` 与 \`expiresAt\`。文件只在隔离区保留 48 小时，未获批准前不会成为公开资源。每个账户隔离区最多占用 50 MB。需要 \`create_playground_post\` 或 \`update_own_playground_post\` 权限。
+上传成功返回 \`uploadId\` 与 \`expiresAt\`。文件只在隔离区保留 4 小时，未获批准前不会成为公开资源；请求获批且文件仅被生成的资源引用时，会立即退出隔离区。每个账户隔离区最多占用 50 MB。需要 \`create_playground_post\` 或 \`update_own_playground_post\` 权限。
 
 ### 请求创建游乐场内容
 

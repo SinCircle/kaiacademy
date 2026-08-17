@@ -1,4 +1,5 @@
-import { requireMember } from "../../../../db/auth";
+import { currentMember, requireMember } from "../../../../db/auth";
+import { isValidPlaygroundShareToken } from "../../../../db/playground-share";
 import {
   createPlaygroundComment,
   deletePlaygroundCommentBranch,
@@ -25,7 +26,9 @@ type RouteContext = { params: Promise<{ id: string }> };
 export async function GET(request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
-    const member = await requireMember(request);
+    const shareToken = new URL(request.url).searchParams.get("share");
+    const publicShare = await isValidPlaygroundShareToken(id, shareToken);
+    const member = publicShare ? await currentMember(request) : await requireMember(request);
     await recordPlaygroundView(id, request, member);
     return cachedJsonResponse(request, await getPlaygroundDetail(id, member));
   } catch (error) {

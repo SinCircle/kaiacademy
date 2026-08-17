@@ -34,7 +34,16 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
-.codex-*.log
+.codex-*
+*.log
+design/prototype/.openai/
+design/prototype/build/
+
+# 本地专属内容，不上传远端
+design/api-demo/
+design/checkin-demo/
+design/playground-demo/
+/future plan/
 
 # env files (can opt-in for committing if needed)
 .env*

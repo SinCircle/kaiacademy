@@ -1,4 +1,5 @@
-import { requireMember } from "../../../../db/auth";
+import { currentMember, requireMember } from "../../../../db/auth";
+import { isValidProblemShareToken } from "../../../../db/problem-share";
 import { applyProblemAction, deleteCreatedProblem, getProblemDetail } from "../../../../db/queries";
 import { apiError, assertSameOrigin, cachedJsonResponse } from "../../_shared";
 import { publishSyncInvalidation } from "../../../../db/sync";
@@ -8,8 +9,10 @@ type RouteContext = { params: Promise<{ id: string }> };
 export async function GET(request: Request, context: RouteContext) {
   try {
     assertSameOrigin(request);
-    const member = await requireMember(request);
     const { id } = await context.params;
+    const shareToken = new URL(request.url).searchParams.get("share");
+    const publicShare = await isValidProblemShareToken(id, shareToken);
+    const member = publicShare ? await currentMember(request) : await requireMember(request);
     return cachedJsonResponse(request, await getProblemDetail(id, member));
   } catch (error) {
     return apiError(error, "暂时无法读取问题详情");

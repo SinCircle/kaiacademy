@@ -1,6 +1,15 @@
 name: gaiyuan
 
 services:
+  sync:
+    image: node:22.14-bookworm-slim
+    command: ["node", "/srv/sync-server.mjs"]
+    restart: unless-stopped
+    expose:
+      - "3001"
+    volumes:
+      - ./sync-server.mjs:/srv/sync-server.mjs:ro
+
   web:
     build:
       context: .
@@ -8,14 +17,17 @@ services:
     env_file:
       - path: ./.dev.vars
         required: true
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     environment:
       NODE_ENV: development
       WRANGLER_WRITE_LOGS: "false"
       WRANGLER_LOG_PATH: /app/.wrangler/logs
       MINIFLARE_REGISTRY_PATH: /app/.wrangler/registry
       CLOUDFLARE_INCLUDE_PROCESS_ENV: "true"
+      VITE_USE_POLLING: "true"
+      SYNC_PUBLISH_URL: http://sync:3001/invalidate
+      SYNC_STREAM_URL: http://sync:3001/api/sync
     volumes:
       - .:/app
       - node_modules:/app/node_modules
@@ -26,6 +38,51 @@ services:
       timeout: 3s
       retries: 12
       start_period: 30s
+
+  api-worker:
+    build:
+      context: .
+      target: development
+    # Match the Vite plugin's Wrangler/Miniflare runtime. Mixing Wrangler 4.123
+    # with the plugin's 4.92 runtime corrupts their shared local metadata after
+    # either process restarts, even though the application D1 data is valid.
+    command: ["node", "node_modules/@cloudflare/vite-plugin/node_modules/wrangler/bin/wrangler.js", "dev", "--config", "wrangler.api.jsonc", "--ip", "0.0.0.0", "--port", "3002", "--persist-to", ".wrangler/state", "--show-interactive-dev-session=false"]
+    restart: unless-stopped
+    env_file:
+      - path: ./.dev.vars
+        required: true
+    expose:
+      - "3002"
+    environment:
+      WRANGLER_WRITE_LOGS: "false"
+      WRANGLER_LOG_PATH: /app/.wrangler/api-logs
+      MINIFLARE_REGISTRY_PATH: /app/.wrangler/api-registry
+      CLOUDFLARE_INCLUDE_PROCESS_ENV: "true"
+      SYNC_PUBLISH_URL: http://sync:3001/invalidate
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+      - d1_data:/app/.wrangler
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health').then(r=>{if(r.status!==204)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+      sync:
+        condition: service_started
+      api-worker:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+    volumes:
+      - ./Caddyfile.dev:/etc/caddy/Caddyfile:ro
 
 volumes:
   node_modules:

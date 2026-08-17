@@ -134,6 +134,34 @@
       "when": 1786765481568,
       "tag": "0018_organic_demogoblin",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1786837051952,
+      "tag": "0019_fast_fantastic_four",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1786845857453,
+      "tag": "0020_white_azazel",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1786850965070,
+      "tag": "0021_big_raza",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1786852581679,
+      "tag": "0022_dazzling_mister_fear",
+      "breakpoints": true
     }
   ]
 }

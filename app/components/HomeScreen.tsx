@@ -11,7 +11,7 @@ import { buildHomeFeed } from "../lib/home-feed";
 import { getCachedJson } from "../lib/client-cache";
 import { MarkdownContent } from "./MarkdownContent";
 import { MarkdownTitle } from "./MarkdownTitle";
-import { MemberAvatar } from "./MemberAvatar";
+import { MemberAvatarStack } from "./MemberAvatar";
 import { SiteHeader } from "./SiteHeader";
 
 export function HomeScreen() {
@@ -67,7 +67,7 @@ export function HomeScreen() {
                     <span className="card-topline"><code>游乐场</code><i>{post.resourceCount ? "资源" : "帖子"}</i></span>
                     <div className="card-copy"><b><MarkdownTitle source={post.title} /></b><MarkdownContent className="card-summary" compact source={post.summary} /></div>
                     <span className="card-tags">{post.tags.slice(0, 3).map((tag) => <i key={tag}>{tag}</i>)}</span>
-                    <span className="card-footer"><span><Clock3 aria-hidden="true" size={13} />{relativeTime(post.updatedAt)}更新</span><span className="card-participants"><span aria-hidden="true" className="card-avatar-stack">{post.interactionAvatars.slice(0, 4).map((person) => <MemberAvatar avatarUpdatedAt={person.avatarUpdatedAt} className="card-avatar" initials={person.initials} key={person.id} memberId={person.id} />)}</span><b>{post.interactionCount} 人互动</b></span></span>
+                    <span className="card-footer"><span><Clock3 aria-hidden="true" size={13} />{relativeTime(post.updatedAt)}更新</span><MemberAvatarStack label="人互动" people={post.interactionAvatars} total={post.interactionCount} variant="card" /></span>
                     <span className="card-action">查看内容<ArrowRight aria-hidden="true" size={14} /></span>
                   </Link>
                 );
@@ -79,7 +79,7 @@ export function HomeScreen() {
                   <span className="card-topline"><code>{problem.shortCode}</code>{problem.status === "开放" && <i>开放</i>}</span>
                   <div className="card-copy"><b><MarkdownTitle source={problem.title} /></b><MarkdownContent className="card-summary" compact source={problem.summary} /></div>
                   <span className="card-tags">{problem.tags.slice(0, 3).map((tag) => <i key={tag}>{tag}</i>)}</span>
-                  <span className="card-footer"><span><Clock3 aria-hidden="true" size={13} />{relativeTime(problem.updatedAt)}更新</span><span className="card-participants"><span aria-hidden="true" className="card-avatar-stack">{problem.participantAvatars.map((person) => <MemberAvatar avatarUpdatedAt={person.avatarUpdatedAt} className="card-avatar" initials={person.initials} key={person.id} memberId={person.id} />)}</span><b>{problem.participantCount} 人参与</b></span></span>
+                  <span className="card-footer"><span><Clock3 aria-hidden="true" size={13} />{relativeTime(problem.updatedAt)}更新</span><MemberAvatarStack label="人参与" people={problem.participantAvatars} total={problem.participantCount} variant="card" /></span>
                   <span className="card-action">查看问题<ArrowRight aria-hidden="true" size={14} /></span>
                 </Link>
               );

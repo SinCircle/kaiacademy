@@ -1,18 +1,16 @@
 "use client";
 
-import { ArrowLeft, ExternalLink, File, Link2, Save, Search, Send, Trash2, Upload, UserRound, X } from "lucide-react";
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, ExternalLink, File, Link2, Save, Send, Trash2, Upload, UserRound } from "lucide-react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import type { DraftExternalResource, PlaygroundDetailData, PlaygroundResource } from "../lib/playground";
 import { MAX_PLAYGROUND_RESOURCES, MAX_PLAYGROUND_UPLOAD_BYTES, formatResourceBytes, validatePlaygroundUpload } from "../lib/playground";
 import { ClientFetchError, getCachedJson, invalidateClientCache } from "../lib/client-cache";
 import { AppLink as Link } from "./AppLink";
-import { MemberAvatar } from "./MemberAvatar";
+import { ContentTransferDialog, type ContentTransferCandidate } from "./ContentTransferDialog";
 import { SiteHeader } from "./SiteHeader";
 import { TagCombobox } from "./TagCombobox";
 
 type FileDraft = { id: string; file: File; description: string };
-type TransferCandidate = { id: string; displayName: string; username: string; initials: string; avatarUpdatedAt: string | null };
-
 export function PlaygroundEditor({ mode, postId }: { mode: "publish" | "settings"; postId?: string }) {
   const settings = mode === "settings";
   const [title, setTitle] = useState("");
@@ -28,15 +26,10 @@ export function PlaygroundEditor({ mode, postId }: { mode: "publish" | "settings
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
-  const [isAuthor, setIsAuthor] = useState(false);
+  const [canManageContent, setCanManageContent] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
-  const [transferQuery, setTransferQuery] = useState("");
-  const [transferCandidates, setTransferCandidates] = useState<TransferCandidate[]>([]);
-  const [transferTarget, setTransferTarget] = useState<TransferCandidate | null>(null);
-  const [transferSearching, setTransferSearching] = useState(false);
   const [ownerActionPending, setOwnerActionPending] = useState(false);
   const [ownerMessage, setOwnerMessage] = useState("");
-  const transferSearchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!settings) {
@@ -56,7 +49,7 @@ export function PlaygroundEditor({ mode, postId }: { mode: "publish" | "settings
         setTags(data.post.tags);
         setBody(data.post.body);
         setExistingResources(data.resources);
-        setIsAuthor(Boolean(data.viewer.isAuthor));
+        setCanManageContent(Boolean(data.viewer.canEdit));
       })
       .catch((error) => {
         if (error instanceof ClientFetchError && error.status === 401) window.location.assign(`/login?returnTo=${encodeURIComponent(`/playground/${postId}/settings`)}`);
@@ -64,42 +57,6 @@ export function PlaygroundEditor({ mode, postId }: { mode: "publish" | "settings
       })
       .finally(() => setLoading(false));
   }, [postId, settings]);
-
-  useEffect(() => {
-    if (!transferOpen || !postId) return;
-    const query = transferQuery.trim();
-    if (!query) {
-      setTransferCandidates([]);
-      setTransferSearching(false);
-      return;
-    }
-    const controller = new AbortController();
-    const timer = window.setTimeout(async () => {
-      setTransferSearching(true);
-      try {
-        const response = await fetch(`/api/playground/${postId}/transfer-candidates?q=${encodeURIComponent(query)}`, { signal: controller.signal });
-        const data = await response.json() as { items?: TransferCandidate[]; message?: string };
-        if (!response.ok) throw new Error(data.message ?? "搜索失败");
-        setTransferCandidates(data.items ?? []);
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setTransferCandidates([]);
-        setOwnerMessage(error instanceof Error ? error.message : "搜索失败");
-      } finally {
-        if (!controller.signal.aborted) setTransferSearching(false);
-      }
-    }, 250);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [postId, transferOpen, transferQuery]);
-
-  useEffect(() => {
-    if (!transferOpen) return;
-    const frame = window.requestAnimationFrame(() => transferSearchRef.current?.focus());
-    return () => window.cancelAnimationFrame(frame);
-  }, [transferOpen]);
 
   const retainedUploadBytes = useMemo(() => existingResources.reduce((sum, resource) => sum + (resource.kind === "upload" ? resource.byteSize ?? 0 : 0), 0), [existingResources]);
   const newUploadBytes = useMemo(() => files.reduce((sum, item) => sum + item.file.size, 0), [files]);
@@ -161,15 +118,12 @@ export function PlaygroundEditor({ mode, postId }: { mode: "publish" | "settings
   function closeTransfer() {
     if (ownerActionPending) return;
     setTransferOpen(false);
-    setTransferQuery("");
-    setTransferCandidates([]);
-    setTransferTarget(null);
     setOwnerMessage("");
   }
 
-  async function transferOwnership() {
-    if (!postId || !transferTarget) return;
-    if (!window.confirm(`确认将这篇内容转让给“${transferTarget.displayName}”吗？转让后你将不能再编辑或删除它。`)) return;
+  async function transferOwnership(transferTarget: ContentTransferCandidate) {
+    if (!postId) return;
+    if (!window.confirm(`确认将这篇内容转让给“${transferTarget.displayName}”吗？确认后，对方将成为新的创建者。`)) return;
     setOwnerActionPending(true);
     setOwnerMessage("");
     try {
@@ -233,7 +187,7 @@ export function PlaygroundEditor({ mode, postId }: { mode: "publish" | "settings
             <button className="secondary-button" disabled={externalOpen} onClick={() => setExternalOpen(true)} type="button"><Link2 aria-hidden="true" size={14} />添加文件链接</button>
           </div>
         </section>
-        {settings && isAuthor && <section className="playground-owner-settings">
+        {settings && canManageContent && <section className="playground-owner-settings">
           <header><div><h2>创建者设置</h2><p>转让后由新创建者维护内容；删除后无法恢复。</p></div></header>
           <div className="playground-owner-actions">
             <button className="secondary-button" disabled={ownerActionPending} onClick={() => { setTransferOpen(true); setOwnerMessage(""); }} type="button"><UserRound aria-hidden="true" size={14} />转让内容</button>
@@ -244,22 +198,7 @@ export function PlaygroundEditor({ mode, postId }: { mode: "publish" | "settings
         <p className="form-message" aria-live="polite">{message}</p>
         <footer><button className="primary-button" disabled={submitting} type="submit">{settings ? <Save aria-hidden="true" size={14} /> : <Send aria-hidden="true" size={14} />}{submitting ? "保存中…" : settings ? "保存设置" : "发布内容"}</button></footer>
       </form>}
-      {transferOpen && <div className="playground-risk-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeTransfer(); }} role="presentation">
-        <section aria-labelledby="playground-transfer-title" aria-modal="true" className="playground-transfer-dialog" role="dialog">
-          <button aria-label="关闭" className="playground-dialog-close" disabled={ownerActionPending} onClick={closeTransfer} type="button"><X aria-hidden="true" size={18} /></button>
-          <h2 id="playground-transfer-title">转让内容</h2>
-          <p>搜索并选择新的创建者。确认后，此内容的编辑和删除权限将一并转交。</p>
-          <label className="playground-transfer-search"><Search aria-hidden="true" size={15} /><input onChange={(event) => { setTransferQuery(event.target.value); setTransferTarget(null); setOwnerMessage(""); }} placeholder="搜索昵称或用户名" ref={transferSearchRef} value={transferQuery} /></label>
-          <div aria-busy={transferSearching} className="playground-transfer-results">
-            {transferCandidates.map((candidate) => <button aria-pressed={transferTarget?.id === candidate.id} className={transferTarget?.id === candidate.id ? "active" : ""} key={candidate.id} onClick={() => setTransferTarget(candidate)} type="button"><MemberAvatar avatarUpdatedAt={candidate.avatarUpdatedAt} initials={candidate.initials} memberId={candidate.id} /><span><b>{candidate.displayName}</b><small>@{candidate.username}</small></span></button>)}
-            {transferSearching && <p>正在搜索…</p>}
-            {!transferSearching && transferQuery.trim() && !transferCandidates.length && <p>没有匹配的成员。</p>}
-            {!transferSearching && !transferQuery.trim() && <p>输入昵称或用户名开始搜索。</p>}
-          </div>
-          <p aria-live="polite" className="form-message">{ownerMessage}</p>
-          <footer><button className="secondary-button" disabled={ownerActionPending} onClick={closeTransfer} type="button">取消</button><button className="primary-button" disabled={!transferTarget || ownerActionPending} onClick={() => void transferOwnership()} type="button">{ownerActionPending ? "转让中…" : "确认转让"}</button></footer>
-        </section>
-      </div>}
+      <ContentTransferDialog message={ownerMessage} onClose={closeTransfer} onConfirm={transferOwnership} onResetMessage={() => setOwnerMessage("")} open={transferOpen} pending={ownerActionPending} searchEndpoint={postId ? `/api/playground/${postId}/transfer-candidates` : ""} />
     </main>
   </div>;
 }

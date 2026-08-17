@@ -1,5 +1,5 @@
 import { requireMember } from "../../../db/auth";
-import { generateInvitation, revokeInvitation } from "../../../db/queries";
+import { generateInvitation, revokeInvitation, updateInvitationRemainingUses } from "../../../db/queries";
 import { apiError, assertSameOrigin } from "../_shared";
 import { publishSyncInvalidation } from "../../../db/sync";
 
@@ -25,5 +25,18 @@ export async function DELETE(request: Request) {
     return Response.json(result);
   } catch (error) {
     return apiError(error, "作废邀请码失败");
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    assertSameOrigin(request);
+    const member = await requireMember(request);
+    const body = await request.json() as { code?: unknown; remainingUses?: unknown };
+    const result = await updateInvitationRemainingUses(member, body.code, body.remainingUses);
+    await publishSyncInvalidation([`/api/members/${member.id}`, "/api/members/me", "/api/admin/members"]);
+    return Response.json(result);
+  } catch (error) {
+    return apiError(error, "修改邀请码额度失败");
   }
 }

@@ -19,6 +19,7 @@ import {
   MoreHorizontal,
   Reply,
   Settings2,
+  Share2,
   ShieldCheck,
   SlidersHorizontal,
   Trash2,
@@ -34,6 +35,7 @@ import { MemberAvatar } from "./MemberAvatar";
 import { MessageComposer } from "./MessageComposer";
 import { SiteHeader } from "./SiteHeader";
 import { CommentReactions } from "./CommentReactions";
+import { ProblemShareDialog } from "./PlaygroundShareDialog";
 
 const REPLIES_PER_PAGE = 50;
 type TreeMessage = DiscussionMessage & { children: TreeMessage[] };
@@ -119,7 +121,8 @@ function MessageThread({
 
 function PersonRow({ person, data, action }: { person: ProblemPerson; data: ProblemDetailData; action(payload: Record<string, unknown>): Promise<boolean> }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const canManage = data.viewer.canManageParticipants && !person.isCreator && (data.viewer.isCreator || !person.isManager);
+  const viewer = data.viewer;
+  const canManage = Boolean(viewer?.canManageParticipants && !person.isCreator && (viewer.isCreator || !person.isManager));
   return (
     <article className="person-row">
       <Link href={`/members/${person.id}`}><MemberAvatar avatarUpdatedAt={person.avatarUpdatedAt} initials={person.initials} memberId={person.id} /><div><b>{person.displayName}</b><small>{person.specialties.join(" / ") || "数学"} · {relativeTime(person.joinedAt)}加入</small></div></Link>
@@ -129,7 +132,7 @@ function PersonRow({ person, data, action }: { person: ProblemPerson; data: Prob
         {person.isAdopted && <BadgeCheck aria-label="内容被采纳" size={15} />}
         {canManage && <button aria-label={`管理 ${person.displayName}`} onClick={() => setMenuOpen((value) => !value)} type="button"><MoreHorizontal aria-hidden="true" size={15} /></button>}
         {menuOpen && <div className="person-menu">
-          {data.viewer.isCreator && <button onClick={() => { void action({ action: "manager", memberId: person.id, isManager: !person.isManager }); setMenuOpen(false); }} type="button"><ShieldCheck aria-hidden="true" size={14} />{person.isManager ? "取消管理" : "任命管理"}</button>}
+          {viewer?.isCreator && <button onClick={() => { void action({ action: "manager", memberId: person.id, isManager: !person.isManager }); setMenuOpen(false); }} type="button"><ShieldCheck aria-hidden="true" size={14} />{person.isManager ? "取消管理" : "任命管理"}</button>}
           {!person.isManager && !person.isAdopted && <button onClick={() => { void action({ action: "participant", memberId: person.id, participating: false }); setMenuOpen(false); }} type="button"><Trash2 aria-hidden="true" size={14} />移出参与者</button>}
         </div>}
       </div>
@@ -140,7 +143,8 @@ function PersonRow({ person, data, action }: { person: ProblemPerson; data: Prob
 function ParticipantPanel({ data, action }: { data: ProblemDetailData; action(payload: Record<string, unknown>): Promise<boolean> }) {
   const relationshipLabels = { watching: "旁观", following: "关注", participating: "参与" } as const;
   const order = ["watching", "following", "participating"] as const;
-  const next = order[(order.indexOf(data.viewer.relation) + 1) % order.length];
+  const viewer = data.viewer;
+  const next = viewer ? order[(order.indexOf(viewer.relation) + 1) % order.length] : "watching";
 
   return (
     <aside className="people-panel">
@@ -154,23 +158,24 @@ function ParticipantPanel({ data, action }: { data: ProblemDetailData; action(pa
         <div>{data.followers.map((person) => <article className="person-row follower" key={person.id}><Link href={`/members/${person.id}`}><MemberAvatar avatarUpdatedAt={person.avatarUpdatedAt} initials={person.initials} memberId={person.id} /><div><b>{person.displayName}</b><small>{person.specialties.join(" / ") || "数学"}</small></div></Link></article>)}</div>
       </section>
 
-      <button className={`relationship-button ${data.viewer.relation}`} disabled={data.viewer.locked} onClick={() => void action({ action: "relationship", relation: next })} title={data.viewer.locked ? "已有内容被采纳，必须保持参与" : `点击切换为${relationshipLabels[next]}`} type="button">
-        {data.viewer.relation === "watching" ? <Eye aria-hidden="true" size={15} /> : data.viewer.relation === "following" ? <Bell aria-hidden="true" size={15} /> : <Users aria-hidden="true" size={15} />}
-        {relationshipLabels[data.viewer.relation]}
-        {data.viewer.locked && <LockKeyhole aria-hidden="true" size={12} />}
-      </button>
+      {viewer && <button className={`relationship-button ${viewer.relation}`} disabled={viewer.locked} onClick={() => void action({ action: "relationship", relation: next })} title={viewer.locked ? "已有内容被采纳，必须保持参与" : `点击切换为${relationshipLabels[next]}`} type="button">
+        {viewer.relation === "watching" ? <Eye aria-hidden="true" size={15} /> : viewer.relation === "following" ? <Bell aria-hidden="true" size={15} /> : <Users aria-hidden="true" size={15} />}
+        {relationshipLabels[viewer.relation]}
+        {viewer.locked && <LockKeyhole aria-hidden="true" size={12} />}
+      </button>}
     </aside>
   );
 }
 
-export function ProblemDetailScreen({ problemId }: { problemId: string }) {
+export function ProblemDetailScreen({ problemId, shareToken }: { problemId: string; shareToken?: string }) {
   const [data, setData] = useState<ProblemDetailData | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [messageFilter, setMessageFilter] = useState<"all" | "tagged" | "解法" | "见解" | "反例">("all");
+  const [shareOpen, setShareOpen] = useState(false);
 
   async function load(force = false) {
-    const url = `/api/problems/${problemId}`;
+    const url = `/api/problems/${problemId}${shareToken ? `?share=${encodeURIComponent(shareToken)}` : ""}`;
     try {
       const next = force
         ? await refreshCachedJson<ProblemDetailData>(url)
@@ -189,9 +194,13 @@ export function ProblemDetailScreen({ problemId }: { problemId: string }) {
     load().catch((error) => setMessage(error instanceof Error ? error.message : "读取失败")).finally(() => setLoading(false));
     // The problem id is the complete resource identity for this screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [problemId]);
+  }, [problemId, shareToken]);
 
   async function action(payload: Record<string, unknown>) {
+    if (!data?.viewer) {
+      window.location.assign(`/login?returnTo=${encodeURIComponent(`/problems/${problemId}`)}`);
+      return false;
+    }
     setMessage("");
     const response = await fetch(`/api/problems/${problemId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const result = await response.json() as { message?: string };
@@ -235,11 +244,11 @@ export function ProblemDetailScreen({ problemId }: { problemId: string }) {
           <section className="problem-main-column">
             {data.problem.background && <details className="problem-background"><summary><ChevronDown aria-hidden="true" size={14} />背景与已知进展</summary><MarkdownContent source={data.problem.background} /></details>}
             <MarkdownContent className="problem-body" source={data.problem.body} />
-            {data.viewer.canEditProblem && <div className="problem-actions"><button className={data.problem.status === "已解决" ? "solved" : ""} onClick={() => void action({ action: "update_problem", title: data.problem.title, body: data.problem.body, background: data.problem.background, tags: data.problem.tags, status: data.problem.status === "已解决" ? "开放" : "已解决" })} type="button"><CheckCircle2 aria-hidden="true" size={14} />{data.problem.status === "已解决" ? "重新开放" : "标记为解决"}</button><Link href={`/problems/${problemId}/settings`}><Settings2 aria-hidden="true" size={14} />问题设置</Link></div>}
+            <div className="problem-actions"><button onClick={() => setShareOpen(true)} type="button"><Share2 aria-hidden="true" size={14} />分享</button>{data.viewer?.canEditProblem && <><button className={data.problem.status === "已解决" ? "solved" : ""} onClick={() => void action({ action: "update_problem", title: data.problem.title, body: data.problem.body, background: data.problem.background, tags: data.problem.tags, status: data.problem.status === "已解决" ? "开放" : "已解决" })} type="button"><CheckCircle2 aria-hidden="true" size={14} />{data.problem.status === "已解决" ? "重新开放" : "标记为解决"}</button><Link href={`/problems/${problemId}/settings`}><Settings2 aria-hidden="true" size={14} />问题设置</Link></>}</div>
 
             <section className="discussion-area">
               <header><h2>讨论</h2><span>{data.messages.length} 条消息</span></header>
-              <MessageComposer avatarUpdatedAt={data.viewer.avatarUpdatedAt} initials={data.viewer.initials} memberId={data.viewer.id} onSubmit={(draft) => action({ action: "create_message", ...draft })} placeholder="补充进展、见解或反例；支持 Markdown 与数学公式" />
+              {data.viewer ? <MessageComposer avatarUpdatedAt={data.viewer.avatarUpdatedAt} initials={data.viewer.initials} memberId={data.viewer.id} onSubmit={(draft) => action({ action: "create_message", ...draft })} placeholder="补充进展、见解或反例；支持 Markdown 与数学公式" /> : <Link className="playground-login-discussion" href={`/login?returnTo=${encodeURIComponent(`/problems/${problemId}`)}`}>登录后参与讨论</Link>}
               <p className="form-message" aria-live="polite">{message}</p>
               <details className="filter-panel message-filter-panel">
                 <summary><span><SlidersHorizontal aria-hidden="true" size={15} />筛选讨论</span><span>{filteredMessages.length} 条结果</span></summary>
@@ -260,7 +269,7 @@ export function ProblemDetailScreen({ problemId }: { problemId: string }) {
                   </div>
                 </div>
               </details>
-              <div className="message-list" role="list">{tree.map((root) => <MessageThread action={action} canAdopt={data.viewer.canAdopt} key={root.id} message={root} />)}</div>
+              <div className="message-list" role="list">{tree.map((root) => <MessageThread action={action} canAdopt={Boolean(data.viewer?.canAdopt)} key={root.id} message={root} />)}</div>
               {!tree.length && <p className="empty-state">没有符合当前标签筛选的评论。</p>}
             </section>
           </section>
@@ -268,6 +277,7 @@ export function ProblemDetailScreen({ problemId }: { problemId: string }) {
           <ParticipantPanel action={action} data={data} />
         </article>
       </main>
+      {shareOpen && <ProblemShareDialog background={data.problem.background} onClose={() => setShareOpen(false)} problem={{ id: data.problem.id, title: data.problem.title, body: data.problem.body, authorName: data.problem.creatorName, createdAt: data.problem.createdAt }} />}
     </div>
   );
 }

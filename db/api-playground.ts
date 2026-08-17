@@ -22,7 +22,7 @@ import {
 } from "./playground";
 import { database, ensureDatabase } from "./runtime";
 
-export const API_UPLOAD_TTL_MS = 48 * 60 * 60 * 1000;
+export const API_UPLOAD_TTL_MS = 4 * 60 * 60 * 1000;
 export const MAX_API_STAGED_BYTES = 50 * 1024 * 1024;
 
 export type PlaygroundApiAction = "create_playground_post" | "update_own_playground_post";
@@ -100,6 +100,9 @@ async function rowsForRequest(requestId: string) {
 
 export async function cleanupExpiredApiUploads() {
   await ensureDatabase();
+  await database().prepare(`UPDATE api_staged_uploads
+    SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', julianday(created_at) + 4.0 / 24.0)
+    WHERE julianday(expires_at) > julianday(created_at) + 4.0 / 24.0`).run();
   const expired = await database().prepare("SELECT id,storage_key AS storageKey FROM api_staged_uploads WHERE expires_at <= ? LIMIT 200")
     .bind(new Date().toISOString()).all<{ id: string; storageKey: string }>();
   if (!expired.results.length) return;
@@ -311,7 +314,7 @@ export async function listPlaygroundForApi(member: SessionMember, requestUrl: st
     type: params.get("type") ?? "all",
     tag: params.get("tag") ?? "",
     format: params.get("format") ?? "",
-    sort: params.get("sort") ?? "latest",
+    sort: params.get("sort") ?? "updated",
     viewerId: member.id,
   });
 }
@@ -351,7 +354,10 @@ export async function applyPlaygroundApiRequest(input: {
         .bind(postId, normalized.title, normalized.body, input.member.id, changedAt, changedAt),
       ...normalized.tags.map((tag) => db.prepare("INSERT INTO playground_tags (post_id,tag) VALUES (?,?)").bind(postId, tag)),
       ...resources.map(playgroundResourceInsert),
-      db.prepare("DELETE FROM api_staged_uploads WHERE request_id = ?").bind(input.requestId),
+      db.prepare(`DELETE FROM api_staged_uploads
+        WHERE request_id = ?
+          AND 1 = (SELECT COUNT(*) FROM playground_resources resource
+            WHERE resource.storage_key = api_staged_uploads.storage_key)`).bind(input.requestId),
     ]);
     return postId;
   }
@@ -381,7 +387,10 @@ export async function applyPlaygroundApiRequest(input: {
     ...normalized.tags.map((tag) => db.prepare("INSERT INTO playground_tags (post_id,tag) VALUES (?,?)").bind(input.playgroundPostId!, tag)),
     ...removed.map((resource) => db.prepare("DELETE FROM playground_resources WHERE id = ? AND post_id = ?").bind(resource.id, input.playgroundPostId)),
     ...added.map(playgroundResourceInsert),
-    db.prepare("DELETE FROM api_staged_uploads WHERE request_id = ?").bind(input.requestId),
+    db.prepare(`DELETE FROM api_staged_uploads
+      WHERE request_id = ?
+        AND 1 = (SELECT COUNT(*) FROM playground_resources resource
+          WHERE resource.storage_key = api_staged_uploads.storage_key)`).bind(input.requestId),
   ]);
   await deletePlaygroundObjects(removed.map((resource) => resource.storageKey).filter((key): key is string => Boolean(key)));
   return input.playgroundPostId;

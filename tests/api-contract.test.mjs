@@ -27,7 +27,7 @@ test("downloaded Skill documents guarded playground resources and ends with the 
   assert.match(content, /请求添加顶层讨论/);
   assert.match(content, /读取内容与讨论/);
   assert.match(content, /上传到文件隔离区/);
-  assert.match(content, /只在隔离区保留 48 小时/);
+  assert.match(content, /只在隔离区保留 4 小时/);
   assert.match(content, /请求创建游乐场内容/);
   assert.match(content, /请求修改自己的游乐场内容/);
   assert.match(content, /读取权限开放情况/);

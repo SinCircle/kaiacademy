@@ -1,0 +1,53 @@
+{
+	email admin@example.com
+}
+
+http://43.134.66.71 {
+	encode zstd gzip
+	@sync path /api/sync
+	handle @sync {
+		reverse_proxy sync:3001
+	}
+	@external_api path /api/v1 /api/v1/*
+	handle @external_api {
+		reverse_proxy api-worker:3002
+	}
+	handle {
+		reverse_proxy web:3000 {
+			header_up Host {host}
+		}
+	}
+}
+
+kaiacademy.top {
+	tls /etc/caddy/certs/kaiacademy.top_bundle.crt /etc/caddy/certs/kaiacademy.top.key
+	encode zstd gzip
+	@sync path /api/sync
+	handle @sync {
+		reverse_proxy sync:3001
+	}
+	@external_api path /api/v1 /api/v1/*
+	handle @external_api {
+		reverse_proxy api-worker:3002
+	}
+	handle {
+		reverse_proxy web:3000 {
+			header_up Host {host}
+		}
+	}
+}
+
+www.kaiacademy.top {
+	tls /etc/caddy/certs/kaiacademy.top_bundle.crt /etc/caddy/certs/kaiacademy.top.key
+	redir https://kaiacademy.top{uri} permanent
+}
+
+:8080 {
+	@resend_email path /emails
+	handle @resend_email {
+		reverse_proxy https://api.resend.com {
+			header_up Host api.resend.com
+		}
+	}
+	respond 404
+}

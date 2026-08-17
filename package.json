@@ -9,8 +9,9 @@
     "dev": "vinext dev",
     "dev:docker": "vinext dev --hostname 0.0.0.0",
     "build": "vinext build",
-    "start": "wrangler dev --config dist/server/wrangler.json --ip 127.0.0.1 --port 3000 --persist-to .wrangler --show-interactive-dev-session=false",
-    "start:docker": "wrangler dev --config dist/server/wrangler.json --ip 0.0.0.0 --port 3000 --persist-to .wrangler --show-interactive-dev-session=false",
+    "start": "node scripts/prepare-wrangler-config.mjs && wrangler dev --config dist/server/wrangler.json --ip 127.0.0.1 --port 3000 --persist-to .wrangler --show-interactive-dev-session=false",
+    "start:api": "wrangler dev --config wrangler.api.jsonc --ip 127.0.0.1 --port 3002 --persist-to .wrangler --show-interactive-dev-session=false",
+    "start:docker": "node scripts/prepare-wrangler-config.mjs && wrangler dev --config dist/server/wrangler.json --ip 0.0.0.0 --port 3000 --persist-to .wrangler --show-interactive-dev-session=false",
     "db:generate": "drizzle-kit generate",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
@@ -19,8 +20,10 @@
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
+    "html-to-image": "^1.11.13",
     "katex": "^0.18.4",
     "lucide-react": "^1.31.0",
+    "qrcode": "^1.5.4",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "react-markdown": "^10.1.0",
@@ -34,6 +37,7 @@
     "@next/eslint-plugin-next": "16.2.6",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
@@ -50,7 +54,7 @@
     "typescript-eslint": "8.59.3",
     "vinext": "1.0.0-beta.2",
     "vite": "8.0.13",
-    "wrangler": "4.92.0"
+    "wrangler": "^4.123.0"
   },
   "type": "module"
 }

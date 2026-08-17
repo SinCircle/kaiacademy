@@ -15,6 +15,7 @@ import {
   MoreHorizontal,
   Pencil,
   Reply,
+  Share2,
   Sparkle,
   SlidersHorizontal,
   Trash2,
@@ -40,6 +41,7 @@ import { MemberAvatar } from "./MemberAvatar";
 import { MessageComposer } from "./MessageComposer";
 import { SiteHeader } from "./SiteHeader";
 import { CommentReactions } from "./CommentReactions";
+import { PlaygroundShareDialog } from "./PlaygroundShareDialog";
 
 type ActionPayload = Record<string, unknown>;
 type CommentFilter = "all" | "marked" | PlaygroundCommentMarker;
@@ -108,25 +110,27 @@ function PlaygroundCommentThread({ comment, action }: {
   </div>;
 }
 
-export function PlaygroundDetailScreen({ postId }: { postId: string }) {
+export function PlaygroundDetailScreen({ postId, shareToken }: { postId: string; shareToken?: string }) {
   const [data, setData] = useState<PlaygroundDetailData | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [commentFilter, setCommentFilter] = useState<CommentFilter>("all");
   const [externalResource, setExternalResource] = useState<PlaygroundResource | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
 
   const load = useCallback(async (fresh = false) => {
     try {
+      const detailUrl = `/api/playground/${postId}${shareToken ? `?share=${encodeURIComponent(shareToken)}` : ""}`;
       const result = fresh
-        ? await refreshCachedJson<PlaygroundDetailData>(`/api/playground/${postId}`)
-        : await getCachedJson<PlaygroundDetailData>(`/api/playground/${postId}`, { onUpdate: setData });
+        ? await refreshCachedJson<PlaygroundDetailData>(detailUrl)
+        : await getCachedJson<PlaygroundDetailData>(detailUrl, { onUpdate: setData });
       setData(result);
       invalidateClientCache(["/api/playground"]);
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "读取失败");
     } finally { setLoading(false); }
-  }, [postId]);
+  }, [postId, shareToken]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -188,6 +192,7 @@ export function PlaygroundDetailScreen({ postId }: { postId: string }) {
           <button className={post.isVoted ? "active" : ""} onClick={() => void action({ action: "toggle_vote" })} type="button"><ArrowUp aria-hidden="true" size={15} />顶 {post.upvotes}</button>
           <button className={post.isBookmarked ? "active" : ""} onClick={() => void action({ action: "toggle_bookmark" })} type="button"><Bookmark aria-hidden="true" size={15} />收藏 {post.bookmarkCount}</button>
           <span className="playground-view-count"><Eye aria-hidden="true" size={15} />浏览 {post.viewCount}</span>
+          <button onClick={() => setShareOpen(true)} type="button"><Share2 aria-hidden="true" size={15} />分享</button>
           {data.viewer?.canEdit && <Link href={`/playground/${postId}/settings`}><Pencil aria-hidden="true" size={15} />编辑</Link>}
         </div>
 
@@ -225,5 +230,6 @@ export function PlaygroundDetailScreen({ postId }: { postId: string }) {
         <footer><button className="secondary-button" onClick={() => setExternalResource(null)} type="button">取消</button><button className="primary-button" onClick={() => { window.open(externalResource.externalUrl ?? "", "_blank", "noopener,noreferrer"); if (data.viewer) void action({ action: "record_interaction" }); setExternalResource(null); }} type="button">继续访问 <ExternalLink aria-hidden="true" size={14} /></button></footer>
       </section>
     </div>}
+    {shareOpen && <PlaygroundShareDialog onClose={() => setShareOpen(false)} post={post} resourceCount={data.resources.length} />}
   </div>;
 }

@@ -18,6 +18,7 @@ import {
 } from "../app/lib/playground";
 import type { SessionMember } from "./auth";
 import { AuthError } from "./auth";
+import { canActAsContentCreator, requireActiveTransferTarget, searchActiveTransferCandidates } from "./content-transfer";
 import { mediaBucket } from "./media";
 import { asString, database, ensureDatabase, jsonArray } from "./runtime";
 
@@ -197,7 +198,7 @@ export async function updatePlaygroundPost(postId: string, member: SessionMember
   const existing = await database().prepare("SELECT id,author_id AS authorId FROM playground_posts WHERE id = ?")
     .bind(postId).first<{ id: string; authorId: string }>();
   if (!existing) throw new AuthError("内容不存在", 404);
-  if (existing.authorId !== member.id) throw new AuthError("只有作者可以修改内容", 403);
+  if (!canActAsContentCreator(member, existing.authorId)) throw new AuthError("只有创建者或超级管理员可以修改内容", 403);
   const input = normalizePlaygroundPostPayload(payload);
   const keepIds = Array.isArray(payload.keepResourceIds)
     ? [...new Set(payload.keepResourceIds.filter((id): id is string => typeof id === "string"))]
@@ -275,10 +276,10 @@ export async function listPlaygroundPosts(options: ListOptions): Promise<Playgro
     clauses.push("EXISTS (SELECT 1 FROM playground_resources filter_resource WHERE filter_resource.post_id = p.id AND (LOWER(filter_resource.display_name) LIKE ? OR LOWER(COALESCE(filter_resource.mime_type,'')) LIKE ?))");
     bindings.push(`%.${format}`, `%${format}%`);
   }
-  const order = options.sort === "updated" ? "p.updated_at DESC"
+  const order = options.sort === "latest" ? "p.created_at DESC"
     : options.sort === "comments" ? "commentCount DESC,p.updated_at DESC"
       : options.sort === "downloads" ? "downloadCount DESC,p.updated_at DESC"
-        : "p.is_pinned DESC,p.created_at DESC";
+        : "p.is_pinned DESC,upvotes DESC,p.updated_at DESC";
   const rows = await database().prepare(`SELECT p.id,p.title,p.body,p.author_id AS authorId,p.created_at AS createdAt,p.updated_at AS updatedAt,p.is_pinned AS isPinned,
       author.display_name AS authorName,author.username AS authorUsername,author.initials AS authorInitials,author.avatar_updated_at AS authorAvatarUpdatedAt,
       (SELECT COUNT(*) FROM playground_resources resource WHERE resource.post_id = p.id) AS resourceCount,
@@ -299,7 +300,7 @@ export async function listPlaygroundPosts(options: ListOptions): Promise<Playgro
   const ids = rows.results.map((row) => row.id);
   const tagsByPost = new Map<string, string[]>();
   const formatsByPost = new Map<string, string[]>();
-  type InteractionPreview = { postId: string; id: string; initials: string; avatarUpdatedAt: string | null; lastInteraction: string };
+  type InteractionPreview = { postId: string; id: string; initials: string; avatarUpdatedAt: string | null; role: string; isAuthor: number; firstInteraction: string; lastInteraction: string };
   const interactionMaps = new Map<string, Map<string, InteractionPreview>>();
   const interactionsByPost = new Map<string, Array<{ id: string; initials: string; avatarUpdatedAt: string | null }>>();
   if (ids.length) {
@@ -307,12 +308,12 @@ export async function listPlaygroundPosts(options: ListOptions): Promise<Playgro
     const [tags, resources, authors, postVotes, bookmarks, commentAuthors, commentVotes, durableInteractions] = await Promise.all([
       database().prepare(`SELECT post_id AS postId,tag FROM playground_tags WHERE post_id IN (${placeholders}) ORDER BY tag`).bind(...ids).all<{ postId: string; tag: string }>(),
       database().prepare(`SELECT post_id AS postId,display_name AS displayName,kind FROM playground_resources WHERE post_id IN (${placeholders})`).bind(...ids).all<{ postId: string; displayName: string; kind: string }>(),
-      database().prepare(`SELECT post.id AS postId,member.id,member.initials,member.avatar_updated_at AS avatarUpdatedAt,post.created_at AS lastInteraction FROM playground_posts post JOIN members member ON member.id = post.author_id WHERE post.id IN (${placeholders})`).bind(...ids).all<InteractionPreview>(),
-      database().prepare(`SELECT vote.post_id AS postId,member.id,member.initials,member.avatar_updated_at AS avatarUpdatedAt,vote.created_at AS lastInteraction FROM playground_post_votes vote JOIN members member ON member.id = vote.member_id WHERE vote.post_id IN (${placeholders})`).bind(...ids).all<InteractionPreview>(),
-      database().prepare(`SELECT bookmark.post_id AS postId,member.id,member.initials,member.avatar_updated_at AS avatarUpdatedAt,bookmark.created_at AS lastInteraction FROM playground_bookmarks bookmark JOIN members member ON member.id = bookmark.member_id WHERE bookmark.post_id IN (${placeholders})`).bind(...ids).all<InteractionPreview>(),
-      database().prepare(`SELECT comment.post_id AS postId,member.id,member.initials,member.avatar_updated_at AS avatarUpdatedAt,comment.created_at AS lastInteraction FROM playground_comments comment JOIN members member ON member.id = comment.author_id WHERE comment.post_id IN (${placeholders})`).bind(...ids).all<InteractionPreview>(),
-      database().prepare(`SELECT comment.post_id AS postId,member.id,member.initials,member.avatar_updated_at AS avatarUpdatedAt,vote.created_at AS lastInteraction FROM playground_comment_votes vote JOIN playground_comments comment ON comment.id = vote.comment_id JOIN members member ON member.id = vote.member_id WHERE comment.post_id IN (${placeholders})`).bind(...ids).all<InteractionPreview>(),
-      database().prepare(`SELECT interaction.post_id AS postId,member.id,member.initials,member.avatar_updated_at AS avatarUpdatedAt,interaction.last_interacted_at AS lastInteraction FROM playground_interactions interaction JOIN members member ON member.id = interaction.member_id WHERE interaction.post_id IN (${placeholders})`).bind(...ids).all<InteractionPreview>(),
+      database().prepare(`SELECT post.id AS postId,member.id,member.initials,member.avatar_updated_at AS avatarUpdatedAt,member.role,1 AS isAuthor,post.created_at AS firstInteraction,post.created_at AS lastInteraction FROM playground_posts post JOIN members member ON member.id = post.author_id WHERE post.id IN (${placeholders})`).bind(...ids).all<InteractionPreview>(),
+      database().prepare(`SELECT vote.post_id AS postId,member.id,member.initials,member.avatar_updated_at AS avatarUpdatedAt,member.role,0 AS isAuthor,vote.created_at AS firstInteraction,vote.created_at AS lastInteraction FROM playground_post_votes vote JOIN members member ON member.id = vote.member_id WHERE vote.post_id IN (${placeholders})`).bind(...ids).all<InteractionPreview>(),
+      database().prepare(`SELECT bookmark.post_id AS postId,member.id,member.initials,member.avatar_updated_at AS avatarUpdatedAt,member.role,0 AS isAuthor,bookmark.created_at AS firstInteraction,bookmark.created_at AS lastInteraction FROM playground_bookmarks bookmark JOIN members member ON member.id = bookmark.member_id WHERE bookmark.post_id IN (${placeholders})`).bind(...ids).all<InteractionPreview>(),
+      database().prepare(`SELECT comment.post_id AS postId,member.id,member.initials,member.avatar_updated_at AS avatarUpdatedAt,member.role,0 AS isAuthor,comment.created_at AS firstInteraction,comment.created_at AS lastInteraction FROM playground_comments comment JOIN members member ON member.id = comment.author_id WHERE comment.post_id IN (${placeholders})`).bind(...ids).all<InteractionPreview>(),
+      database().prepare(`SELECT comment.post_id AS postId,member.id,member.initials,member.avatar_updated_at AS avatarUpdatedAt,member.role,0 AS isAuthor,vote.created_at AS firstInteraction,vote.created_at AS lastInteraction FROM playground_comment_votes vote JOIN playground_comments comment ON comment.id = vote.comment_id JOIN members member ON member.id = vote.member_id WHERE comment.post_id IN (${placeholders})`).bind(...ids).all<InteractionPreview>(),
+      database().prepare(`SELECT interaction.post_id AS postId,member.id,member.initials,member.avatar_updated_at AS avatarUpdatedAt,member.role,0 AS isAuthor,interaction.first_interacted_at AS firstInteraction,interaction.last_interacted_at AS lastInteraction FROM playground_interactions interaction JOIN members member ON member.id = interaction.member_id WHERE interaction.post_id IN (${placeholders})`).bind(...ids).all<InteractionPreview>(),
     ]);
     for (const row of tags.results) tagsByPost.set(row.postId, [...(tagsByPost.get(row.postId) ?? []), row.tag]);
     for (const row of resources.results) {
@@ -325,12 +326,23 @@ export async function listPlaygroundPosts(options: ListOptions): Promise<Playgro
       for (const row of source.results) {
         const members = interactionMaps.get(row.postId) ?? new Map<string, InteractionPreview>();
         const current = members.get(row.id);
-        if (!current || row.lastInteraction > current.lastInteraction) members.set(row.id, row);
+        if (!current) members.set(row.id, row);
+        else members.set(row.id, {
+          ...current,
+          isAuthor: Math.max(current.isAuthor, row.isAuthor),
+          firstInteraction: row.firstInteraction < current.firstInteraction ? row.firstInteraction : current.firstInteraction,
+          lastInteraction: row.lastInteraction > current.lastInteraction ? row.lastInteraction : current.lastInteraction,
+        });
         interactionMaps.set(row.postId, members);
       }
     }
     for (const [postId, members] of interactionMaps) interactionsByPost.set(postId, [...members.values()]
-      .sort((left, right) => right.lastInteraction.localeCompare(left.lastInteraction))
+      .sort((left, right) => {
+        const priority = (person: InteractionPreview) => person.isAuthor ? 0 : person.role === "superadmin" ? 1 : person.role === "admin" ? 2 : 3;
+        return priority(left) - priority(right)
+          || left.firstInteraction.localeCompare(right.firstInteraction)
+          || left.id.localeCompare(right.id);
+      })
       .map(({ id, initials, avatarUpdatedAt }) => ({ id, initials, avatarUpdatedAt })));
   }
   return rows.results.map((row) => ({
@@ -347,7 +359,7 @@ export async function listPlaygroundPosts(options: ListOptions): Promise<Playgro
     downloadCount: Number(row.downloadCount),
     viewCount: Number(row.viewCount),
     interactionCount: interactionsByPost.get(row.id)?.length ?? 0,
-    interactionAvatars: (interactionsByPost.get(row.id) ?? []).slice(0, 4),
+    interactionAvatars: (interactionsByPost.get(row.id) ?? []).slice(0, 8),
     isVoted: Boolean(row.isVoted),
     isBookmarked: Boolean(row.isBookmarked),
   }));
@@ -377,6 +389,7 @@ export async function getPlaygroundDetail(postId: string, viewer: SessionMember 
   if (!post) throw new AuthError("内容不存在", 404);
   const siteAdmin = viewer?.role === "admin" || viewer?.role === "superadmin";
   const isAuthor = viewer?.id === post.authorId;
+  const canManageContent = viewer ? canActAsContentCreator(viewer, post.authorId) : false;
   if (post.isHidden && !siteAdmin && !isAuthor) throw new AuthError("内容不存在", 404);
   const [tagRows, resourceRows, commentRows, reactionRows] = await Promise.all([
     database().prepare("SELECT tag FROM playground_tags WHERE post_id = ? ORDER BY tag").bind(postId).all<{ tag: string }>(),
@@ -445,7 +458,7 @@ export async function getPlaygroundDetail(postId: string, viewer: SessionMember 
     },
     resources: resourceRows.results.map((resource) => ({ ...resource, byteSize: resource.byteSize === null ? null : Number(resource.byteSize), downloadCount: Number(resource.downloadCount) })),
     comments,
-    viewer: viewer ? { id: viewer.id, role: viewer.role, initials: viewer.initials, avatarUpdatedAt: viewer.avatarUpdatedAt, isAuthor: Boolean(isAuthor), canEdit: Boolean(isAuthor), canDelete: Boolean(isAuthor), canModerateComments } : null,
+    viewer: viewer ? { id: viewer.id, role: viewer.role, initials: viewer.initials, avatarUpdatedAt: viewer.avatarUpdatedAt, isAuthor: Boolean(isAuthor), canEdit: canManageContent, canDelete: canManageContent, canModerateComments } : null,
   };
 }
 
@@ -457,9 +470,9 @@ async function existingPost(postId: string) {
 }
 
 async function recordPlaygroundInteraction(postId: string, memberId: string, interactedAt = new Date().toISOString()) {
-  await database().prepare(`INSERT INTO playground_interactions (post_id,member_id,last_interacted_at) VALUES (?,?,?)
+  await database().prepare(`INSERT INTO playground_interactions (post_id,member_id,first_interacted_at,last_interacted_at) VALUES (?,?,?,?)
     ON CONFLICT(post_id,member_id) DO UPDATE SET last_interacted_at = excluded.last_interacted_at`)
-    .bind(postId, memberId, interactedAt).run();
+    .bind(postId, memberId, interactedAt, interactedAt).run();
 }
 
 async function notifyPlayground(postId: string, actorId: string, recipientIds: string[], kind: string, summary: string) {
@@ -651,7 +664,7 @@ export async function playgroundResourceKeysForPost(postId: string) {
 export async function deletePlaygroundPost(postId: string, member: SessionMember) {
   await ensureDatabase();
   const post = await existingPost(postId);
-  if (post.authorId !== member.id) throw new AuthError("只有创建者可以删除内容", 403);
+  if (!canActAsContentCreator(member, post.authorId)) throw new AuthError("只有创建者或超级管理员可以删除内容", 403);
   const keys = await playgroundResourceKeysForPost(postId);
   await database().prepare("DELETE FROM playground_posts WHERE id = ?").bind(postId).run();
   await deletePlaygroundObjects(keys);
@@ -661,36 +674,22 @@ export async function deletePlaygroundPost(postId: string, member: SessionMember
 export async function searchPlaygroundTransferCandidates(postId: string, member: SessionMember, queryValue: unknown) {
   await ensureDatabase();
   const post = await existingPost(postId);
-  if (post.authorId !== member.id) throw new AuthError("只有创建者可以转让内容", 403);
-  const query = asString(queryValue, 80);
-  if (!query) return [];
-  const target = `%${query.replace(/[%_]/g, "")}%`;
-  const rows = await database().prepare(`SELECT id,display_name AS displayName,username,initials,avatar_updated_at AS avatarUpdatedAt
-    FROM members WHERE id != ? AND account_status = 'active'
-      AND (display_name LIKE ? OR username LIKE ?)
-    ORDER BY CASE WHEN display_name = ? OR username = ? THEN 0 ELSE 1 END,display_name LIMIT 12`)
-    .bind(member.id, target, target, query, query).all<{
-      id: string; displayName: string; username: string; initials: string; avatarUpdatedAt: string | null;
-    }>();
-  return rows.results;
+  if (!canActAsContentCreator(member, post.authorId)) throw new AuthError("只有创建者或超级管理员可以转让内容", 403);
+  return searchActiveTransferCandidates(post.authorId, queryValue);
 }
 
 export async function transferPlaygroundPost(postId: string, member: SessionMember, targetMemberIdValue: unknown) {
   await ensureDatabase();
   const post = await existingPost(postId);
-  if (post.authorId !== member.id) throw new AuthError("只有创建者可以转让内容", 403);
-  const targetMemberId = asString(targetMemberIdValue, 100);
-  if (!targetMemberId || targetMemberId === member.id) throw new AuthError("请选择其他成员");
-  const target = await database().prepare("SELECT id FROM members WHERE id = ? AND account_status = 'active'")
-    .bind(targetMemberId).first<{ id: string }>();
-  if (!target) throw new AuthError("目标成员不存在或账户不可用", 404);
+  if (!canActAsContentCreator(member, post.authorId)) throw new AuthError("只有创建者或超级管理员可以转让内容", 403);
+  const target = await requireActiveTransferTarget(post.authorId, targetMemberIdValue);
   const changedAt = new Date().toISOString();
   await database().batch([
     database().prepare("UPDATE playground_posts SET author_id = ?, updated_at = ? WHERE id = ? AND author_id = ?")
-      .bind(target.id, changedAt, postId, member.id),
-    database().prepare(`INSERT INTO playground_interactions (post_id,member_id,last_interacted_at) VALUES (?,?,?)
+      .bind(target.id, changedAt, postId, post.authorId),
+    database().prepare(`INSERT INTO playground_interactions (post_id,member_id,first_interacted_at,last_interacted_at) VALUES (?,?,?,?)
       ON CONFLICT(post_id,member_id) DO UPDATE SET last_interacted_at = excluded.last_interacted_at`)
-      .bind(postId, target.id, changedAt),
+      .bind(postId, target.id, changedAt, changedAt),
   ]);
   await notifyPlayground(postId, member.id, [target.id], "ownership_transfer", `${member.displayName}将内容转让给了你`);
   return { transferred: true };

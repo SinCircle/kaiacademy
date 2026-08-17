@@ -44,12 +44,13 @@ type ProfileData = {
     bookmarkedAt: string | null;
     lastViewedAt: string | null;
   }>;
-  invitations: Array<{ code: string; createdAt: string }>;
+  invitations: Array<{ code: string; createdAt: string; remainingUses: number }>;
   viewer: { id: string; isSelf: boolean };
 };
 
 const tabs = [
-  { key: "all", label: "所有参与" },
+  { key: "participating", label: "参与难题" },
+  { key: "following", label: "关注难题" },
   { key: "created", label: "创建的难题" },
   { key: "footprints", label: "足迹" },
   { key: "interacted", label: "互动过的难题" },
@@ -78,7 +79,12 @@ export function ProfileScreen({ memberId = "me" }: { memberId?: string }) {
   const [inviteError, setInviteError] = useState(false);
   const [generatingInvitation, setGeneratingInvitation] = useState(false);
   const [revokingInvitation, setRevokingInvitation] = useState("");
-  const [activeTab, setActiveTab] = useState<ProfileTabKey>("all");
+  const [copiedInvitations, setCopiedInvitations] = useState<Set<string>>(() => new Set());
+  const [quotaInvitation, setQuotaInvitation] = useState<null | { code: string; remainingUses: number; maxAvailable: number }>(null);
+  const [quotaDraft, setQuotaDraft] = useState("1");
+  const [quotaSaving, setQuotaSaving] = useState(false);
+  const [quotaError, setQuotaError] = useState("");
+  const [activeTab, setActiveTab] = useState<ProfileTabKey>("participating");
   const [editing, setEditing] = useState(false);
   const [apiSaving, setApiSaving] = useState(false);
   const [requirementOpen, setRequirementOpen] = useState(false);
@@ -110,7 +116,7 @@ export function ProfileScreen({ memberId = "me" }: { memberId?: string }) {
   }
 
   useEffect(() => {
-    setActiveTab("all");
+    setActiveTab("participating");
     load().catch((error) => setMessage(error instanceof Error ? error.message : "读取失败")).finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [memberId]);
@@ -139,6 +145,9 @@ export function ProfileScreen({ memberId = "me" }: { memberId?: string }) {
     if (activeTab === "created") return data.problems
       .filter((problem) => problem.isCreator)
       .map((problem) => problemItem(problem, `创建者 · ${problem.status} · ${relativeTime(problem.updatedAt)}更新`));
+    if (activeTab === "following") return data.problems
+      .filter((problem) => problem.relation === "following")
+      .map((problem) => problemItem(problem, `关注者 · ${problem.status} · ${relativeTime(problem.updatedAt)}更新`));
     if (activeTab === "footprints") return [
       ...data.problems.filter((problem) => problem.lastViewedAt).map((problem) => problemItem(problem, `难题 · ${relativeTime(problem.lastViewedAt!)}查看`, problem.lastViewedAt!)),
       ...data.playground.filter((post) => post.lastViewedAt).map((post) => playgroundItem(post, `${relativeTime(post.lastViewedAt!)}查看`, post.lastViewedAt!)),
@@ -159,14 +168,15 @@ export function ProfileScreen({ memberId = "me" }: { memberId?: string }) {
       .map((post) => playgroundItem(post, `已收藏 · ${relativeTime(post.updatedAt)}更新`, post.bookmarkedAt ?? post.updatedAt))
       .sort((left, right) => right.sortAt.localeCompare(left.sortAt));
     return data.problems
-      .filter((problem) => problem.isCreator || Boolean(problem.relation))
-      .map((problem) => problemItem(problem, `${problem.isCreator ? "创建者" : problem.relation === "participating" ? "参与者" : "关注者"} · ${problem.status} · ${relativeTime(problem.updatedAt)}更新`));
+      .filter((problem) => problem.relation === "participating")
+      .map((problem) => problemItem(problem, `参与者 · ${problem.status} · ${relativeTime(problem.updatedAt)}更新`));
   }, [activeTab, data]);
 
   const tabCounts = useMemo<Record<ProfileTabKey, number>>(() => {
-    if (!data) return { all: 0, created: 0, footprints: 0, interacted: 0, "playground-created": 0, "playground-interacted": 0, "playground-bookmarked": 0 };
+    if (!data) return { participating: 0, following: 0, created: 0, footprints: 0, interacted: 0, "playground-created": 0, "playground-interacted": 0, "playground-bookmarked": 0 };
     return {
-      all: data.problems.filter((problem) => problem.isCreator || Boolean(problem.relation)).length,
+      participating: data.problems.filter((problem) => problem.relation === "participating").length,
+      following: data.problems.filter((problem) => problem.relation === "following").length,
       created: data.problems.filter((problem) => problem.isCreator).length,
       footprints: data.problems.filter((problem) => problem.lastViewedAt).length + data.playground.filter((post) => post.lastViewedAt).length,
       interacted: data.problems.filter((problem) => problem.hasInteracted).length,
@@ -229,6 +239,73 @@ export function ProfileScreen({ memberId = "me" }: { memberId?: string }) {
     }
   }
 
+  async function copyInvitation(code: string) {
+    setInviteMessage("");
+    setInviteError(false);
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopiedInvitations((current) => new Set(current).add(code));
+      window.setTimeout(() => {
+        setCopiedInvitations((current) => {
+          const next = new Set(current);
+          next.delete(code);
+          return next;
+        });
+      }, 2_000);
+    } catch {
+      setInviteError(true);
+      setInviteMessage("复制失败，请手动复制邀请码。");
+    }
+  }
+
+  function editInvitationQuota(invitation: ProfileData["invitations"][number]) {
+    if (!data) return;
+    const otherAllocated = data.invitations.reduce((total, item) => item.code === invitation.code ? total : total + item.remainingUses, 0);
+    const maxAvailable = Math.max(0, data.member.inviteQuota - otherAllocated);
+    setQuotaInvitation({ code: invitation.code, remainingUses: invitation.remainingUses, maxAvailable });
+    setQuotaDraft(String(invitation.remainingUses));
+    setQuotaError("");
+    setInviteMessage("");
+    setInviteError(false);
+  }
+
+  async function saveInvitationQuota(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!quotaInvitation) return;
+    const nextQuota = Number(quotaDraft);
+    if (!Number.isInteger(nextQuota) || nextQuota < 1) {
+      setQuotaError("请输入大于等于 1 的整数。");
+      return;
+    }
+    if (nextQuota > quotaInvitation.maxAvailable) {
+      setQuotaError(`这个邀请码最多可分配 ${quotaInvitation.maxAvailable} 次额度。`);
+      return;
+    }
+    setQuotaSaving(true);
+    setInviteMessage("");
+    setInviteError(false);
+    setQuotaError("");
+    try {
+      const response = await fetch("/api/invitations", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: quotaInvitation.code, remainingUses: nextQuota }),
+      });
+      const result = await response.json() as { message?: string; remainingUses?: number };
+      if (!response.ok) {
+        setInviteError(true);
+        setQuotaError(result.message ?? "修改失败");
+        return;
+      }
+      setQuotaInvitation(null);
+      setInviteMessage("邀请码额度已更新。");
+      invalidateClientCache(`/api/members/${memberId}`);
+      await load(true);
+    } finally {
+      setQuotaSaving(false);
+    }
+  }
+
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const response = await fetch(`/api/members/${data?.member.id}`, {
@@ -267,7 +344,8 @@ export function ProfileScreen({ memberId = "me" }: { memberId?: string }) {
   if (loading) return <div className="site-shell"><SiteHeader active="profile" /><main className="loading-page">正在读取个人资料…</main></div>;
   if (!data) return <div className="site-shell"><SiteHeader active="profile" /><main className="loading-page">{message || "成员不存在"}</main></div>;
 
-  const canGenerateInvitation = data.member.inviteQuota > data.invitations.length;
+  const allocatedInvitationUses = data.invitations.reduce((total, invitation) => total + invitation.remainingUses, 0);
+  const canGenerateInvitation = data.member.inviteQuota > allocatedInvitationUses;
 
   return (
     <div className="site-shell">
@@ -296,7 +374,26 @@ export function ProfileScreen({ memberId = "me" }: { memberId?: string }) {
 
             {data.viewer.isSelf && <section className="profile-api-switch"><div><h2>API</h2><p>允许本地工具通过人工审阅协同难题。</p></div><button aria-checked={data.member.apiEnabled} className={`${!data.member.apiQualified ? "unmet" : data.member.apiEnabled ? "on" : ""}`} disabled={apiSaving} onClick={() => void toggleApi()} role="switch" type="button"><span>{!data.member.apiQualified ? "未达标" : data.member.apiEnabled ? "已启用" : "已关闭"}</span>{!data.member.apiQualified ? <AlertCircle aria-hidden="true" size={18} /> : <i aria-hidden="true" />}</button></section>}
 
-            {data.viewer.isSelf && <section className="invite-panel"><h2>可用邀请</h2><div className="invite-quota"><strong>{data.member.inviteQuota}</strong><span>个名额</span></div><p>可以同时生成多个邀请码。邀请码被使用后会从列表消失并扣除一个名额；未使用的邀请码可随时作废。</p>{Boolean(data.invitations.length) && <div className="invite-code-list">{data.invitations.map((invitation) => <div className="invite-code" key={invitation.code}><code>{invitation.code}</code><button aria-label={`复制邀请码 ${invitation.code}`} onClick={() => void navigator.clipboard.writeText(invitation.code)} type="button"><Copy aria-hidden="true" size={14} /></button><button aria-label={`作废邀请码 ${invitation.code}`} className="revoke" disabled={revokingInvitation === invitation.code} onClick={() => void revokeInvitation(invitation.code)} type="button"><Ban aria-hidden="true" size={13} /><span>{revokingInvitation === invitation.code ? "处理中" : "作废"}</span></button></div>)}</div>}<button disabled={!canGenerateInvitation || generatingInvitation} onClick={() => void generateInvitation()} type="button"><Plus aria-hidden="true" size={14} />{generatingInvitation ? "生成中…" : canGenerateInvitation ? "生成邀请码" : data.member.inviteQuota <= 0 ? "暂无邀请名额" : "邀请码数量已达名额"}</button><p className={`invite-message${inviteError ? " error" : ""}`} aria-live="polite">{inviteMessage}</p></section>}
+            {data.viewer.isSelf && <section className="invite-panel">
+              <h2>可用邀请</h2>
+              <div className="invite-quota"><strong>{data.member.inviteQuota}</strong><span>个名额</span></div>
+              <p>邀请码可重复使用。每使用一次会扣除一个名额；额度用尽后会从列表消失，未用完的邀请码可随时作废。</p>
+              {Boolean(data.invitations.length) && <div className="invite-code-list">{data.invitations.map((invitation) => {
+                const copied = copiedInvitations.has(invitation.code);
+                return <div className="invite-code" key={invitation.code}>
+                  <code>{invitation.code}</code>
+                  <button
+                    aria-label={copied ? `修改邀请码 ${invitation.code} 的额度，当前剩余 ${invitation.remainingUses} 次` : `复制邀请码 ${invitation.code}`}
+                    className={copied ? "quota" : undefined}
+                    onClick={() => copied ? editInvitationQuota(invitation) : void copyInvitation(invitation.code)}
+                    type="button"
+                  >{copied ? <b>{invitation.remainingUses}</b> : <Copy aria-hidden="true" size={14} />}</button>
+                  <button aria-label={`作废邀请码 ${invitation.code}`} className="revoke" disabled={revokingInvitation === invitation.code} onClick={() => void revokeInvitation(invitation.code)} type="button"><Ban aria-hidden="true" size={13} /><span>{revokingInvitation === invitation.code ? "处理中" : "作废"}</span></button>
+                </div>;
+              })}</div>}
+              <button disabled={!canGenerateInvitation || generatingInvitation} onClick={() => void generateInvitation()} type="button"><Plus aria-hidden="true" size={14} />{generatingInvitation ? "生成中…" : canGenerateInvitation ? "生成邀请码" : data.member.inviteQuota <= 0 ? "暂无邀请名额" : "邀请码额度已占满"}</button>
+              <p className={`invite-message${inviteError ? " error" : ""}`} aria-live="polite">{inviteMessage}</p>
+            </section>}
           </aside>
 
           <section className="profile-problems">
@@ -307,6 +404,17 @@ export function ProfileScreen({ memberId = "me" }: { memberId?: string }) {
         <p className="page-message" aria-live="polite">{message}</p>
       </main>
       {requirementOpen && <div className="api-dialog-backdrop"><section aria-labelledby="api-requirement-title" aria-modal="true" className="api-requirement-dialog" role="dialog"><button aria-label="关闭" className="api-dialog-close" onClick={() => setRequirementOpen(false)} type="button"><X aria-hidden="true" size={18} /></button><h2 id="api-requirement-title">我们始终确保您在负责任地使用 AI</h2><p>为了确保您正确高效地使用 AI 协同本站，我们需要您对本站有一定认识，并且有充足的 AI 使用需求。在此，我们需要您至少在“难题”板块参与过一次讨论。谢谢理解！</p><footer><button className="primary-button" onClick={() => setRequirementOpen(false)} type="button">知道了</button></footer></section></div>}
+      {quotaInvitation && <div className="api-dialog-backdrop"><section aria-labelledby="invite-quota-title" aria-modal="true" className="invite-quota-dialog" role="dialog">
+        <button aria-label="关闭" className="api-dialog-close" onClick={() => setQuotaInvitation(null)} type="button"><X aria-hidden="true" size={18} /></button>
+        <h2 id="invite-quota-title">修改邀请码额度</h2>
+        <code>{quotaInvitation.code}</code>
+        <form noValidate onSubmit={(event) => void saveInvitationQuota(event)}>
+          <label><span>剩余次数</span><input autoFocus inputMode="numeric" max={quotaInvitation.maxAvailable} min={1} onChange={(event) => setQuotaDraft(event.target.value)} required step={1} type="number" value={quotaDraft} /></label>
+          <p>最多可分配 {quotaInvitation.maxAvailable} 次，其他邀请码已占用的额度不会被挪用。</p>
+          <p aria-live="polite" className="invite-quota-error" role={quotaError ? "alert" : undefined}>{quotaError}</p>
+          <footer><button className="secondary-button" onClick={() => setQuotaInvitation(null)} type="button">取消</button><button className="primary-button" disabled={quotaSaving} type="submit">{quotaSaving ? "保存中…" : "保存"}</button></footer>
+        </form>
+      </section></div>}
     </div>
   );
 }

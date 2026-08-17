@@ -8,13 +8,13 @@ import { fullDate, relativeTime } from "../lib/format";
 import { useSession } from "../hooks/useSession";
 import { AppLink as Link } from "./AppLink";
 import { MarkdownTitle } from "./MarkdownTitle";
-import { MemberAvatar } from "./MemberAvatar";
+import { MemberAvatarStack } from "./MemberAvatar";
 import { SiteHeader } from "./SiteHeader";
 
 type PlaygroundResponse = { posts: PlaygroundPostCard[] };
 type Filters = { q: string; type: "all" | "post" | "resource"; tag: string; format: string; sort: string };
 type FilterKey = "type" | "tag" | "format" | "sort";
-const emptyFilters: Filters = { q: "", type: "all", tag: "", format: "", sort: "latest" };
+const emptyFilters: Filters = { q: "", type: "all", tag: "", format: "", sort: "updated" };
 
 export function PlaygroundScreen() {
   const { member } = useSession();
@@ -28,8 +28,7 @@ export function PlaygroundScreen() {
 
   const endpoint = useMemo(() => {
     const params = new URLSearchParams();
-    Object.entries(filters).forEach(([key, value]) => { if (value && value !== "all" && value !== "latest") params.set(key, value); });
-    if (filters.sort !== "latest") params.set("sort", filters.sort);
+    Object.entries(filters).forEach(([key, value]) => { if (value && value !== "all" && value !== "updated") params.set(key, value); });
     const query = params.toString();
     return `/api/playground${query ? `?${query}` : ""}`;
   }, [filters]);
@@ -64,7 +63,7 @@ export function PlaygroundScreen() {
     { key: "type", label: "类型", options: [{ value: "all", label: "全部" }, { value: "post", label: "帖子" }, { value: "resource", label: "资源" }] },
     { key: "tag", label: "标签", clearable: true, options: knownTags.slice(0, 10).map((tag) => ({ value: tag, label: tag })) },
     { key: "format", label: "格式", clearable: true, options: knownFormats.slice(0, 10).map((format) => ({ value: format, label: format })) },
-    { key: "sort", label: "排序", options: [{ value: "latest", label: "最新发布" }, { value: "updated", label: "最近更新" }, { value: "comments", label: "讨论最多" }, { value: "downloads", label: "下载最多" }] },
+    { key: "sort", label: "排序", options: [{ value: "updated", label: "最近更新" }, { value: "latest", label: "最新发布" }, { value: "comments", label: "讨论最多" }, { value: "downloads", label: "下载最多" }] },
   ];
 
   return <div className="site-shell">
@@ -110,8 +109,10 @@ export function PlaygroundScreen() {
             </footer>
           </div>
           <span className="result-meta-stack playground-result-meta">
-            {post.resourceCount > 0 && <span className="result-status"><Paperclip aria-hidden="true" size={13} />{post.resourceCount} 个资源</span>}
-            <span aria-label={`${post.interactionCount} 人互动`} className="result-avatars" title={`${post.interactionCount} 人互动`}><span aria-hidden="true" className="result-avatar-stack">{post.interactionAvatars.map((person) => <MemberAvatar avatarUpdatedAt={person.avatarUpdatedAt} className="result-avatar" initials={person.initials} key={person.id} memberId={person.id} />)}</span><small className="result-participant-count">{post.interactionCount} 人互动</small></span>
+            {post.resourceCount > 0
+              ? <span className="result-status"><Paperclip aria-hidden="true" size={13} />{post.resourceCount} 个资源</span>
+              : <span aria-hidden="true" className="result-status-spacer" />}
+            <MemberAvatarStack label="人互动" people={post.interactionAvatars} total={post.interactionCount} variant="result" />
           </span>
           <ArrowUpRight aria-hidden="true" size={16} />
         </Link>)}

@@ -20,12 +20,10 @@ export function database(): Database {
   return db;
 }
 
-// 引导账号为占位数据：哈希与盐均为占位符，对应账号无法登录。
-// 部署前请在代码中替换为真实账号，或通过外部初始化写入数据库。
-const bootstrapPasswordHash = "0000000000000000000000000000000000000000000000000000000000000000";
-const bootstrapPasswordSalt = "gaiyuan-bootstrap-placeholder";
-const adminPasswordHash = "0000000000000000000000000000000000000000000000000000000000000000";
-const adminPasswordSalt = "gaiyuan-sincircle-placeholder";
+const bootstrapPasswordHash = "e6d3558e2f3545b6526c0adb863e008b50f476bd2c9db06b6727d5842faaa4a1";
+const bootstrapPasswordSalt = "gaiyuan-bootstrap-2026";
+const adminPasswordHash = "38c4d3af3f5ba479d2943ec5c7c2f8c53c113adafe2c19df2b5b080e8af3121d";
+const adminPasswordSalt = "gaiyuan-sincircle-2026";
 
 export async function ensureDatabase() {
   if (!initialization) {
@@ -74,8 +72,17 @@ export async function ensureDatabase() {
         created_at TEXT NOT NULL,
         used_at TEXT,
         revoked_at TEXT,
+        remaining_uses INTEGER NOT NULL DEFAULT 1,
         FOREIGN KEY (created_by) REFERENCES members(id) ON DELETE CASCADE,
         FOREIGN KEY (used_by) REFERENCES members(id) ON DELETE SET NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS invitation_code_uses (
+        id TEXT PRIMARY KEY NOT NULL,
+        code TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        used_at TEXT NOT NULL,
+        FOREIGN KEY (code) REFERENCES invitation_codes(code) ON DELETE CASCADE,
+        FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
       )`,
       `CREATE TABLE IF NOT EXISTS email_verification_codes (
         id TEXT PRIMARY KEY NOT NULL,
@@ -195,6 +202,24 @@ export async function ensureDatabase() {
         updated_at TEXT NOT NULL,
         FOREIGN KEY (author_id) REFERENCES members(id) ON DELETE CASCADE
       )`,
+      `CREATE TABLE IF NOT EXISTS playground_share_tokens (
+        post_id TEXT PRIMARY KEY NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        revoked_at TEXT,
+        FOREIGN KEY (post_id) REFERENCES playground_posts(id) ON DELETE CASCADE,
+        FOREIGN KEY (created_by) REFERENCES members(id) ON DELETE CASCADE
+      )`,
+      `CREATE TABLE IF NOT EXISTS problem_share_tokens (
+        problem_id TEXT PRIMARY KEY NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        revoked_at TEXT,
+        FOREIGN KEY (problem_id) REFERENCES problems(id) ON DELETE CASCADE,
+        FOREIGN KEY (created_by) REFERENCES members(id) ON DELETE CASCADE
+      )`,
       `CREATE TABLE IF NOT EXISTS playground_tags (
         post_id TEXT NOT NULL,
         tag TEXT NOT NULL,
@@ -268,6 +293,7 @@ export async function ensureDatabase() {
       `CREATE TABLE IF NOT EXISTS playground_interactions (
         post_id TEXT NOT NULL,
         member_id TEXT NOT NULL,
+        first_interacted_at TEXT NOT NULL,
         last_interacted_at TEXT NOT NULL,
         PRIMARY KEY (post_id, member_id),
         FOREIGN KEY (post_id) REFERENCES playground_posts(id) ON DELETE CASCADE,
@@ -389,12 +415,14 @@ export async function ensureDatabase() {
       )`,
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_members_email ON members(email)",
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_members_username ON members(username)",
-      "CREATE UNIQUE INDEX IF NOT EXISTS idx_members_registration_invite_code ON members(registration_invite_code)",
+      "CREATE INDEX IF NOT EXISTS idx_members_registration_invite_code ON members(registration_invite_code)",
       "CREATE INDEX IF NOT EXISTS idx_sessions_member_id ON sessions(member_id)",
       "CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)",
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_checkins_member_date ON daily_checkins(member_id, draw_date)",
       "CREATE INDEX IF NOT EXISTS idx_daily_checkins_member_created ON daily_checkins(member_id, created_at)",
       "CREATE INDEX IF NOT EXISTS idx_invitation_codes_created_by ON invitation_codes(created_by)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_invitation_code_uses_member ON invitation_code_uses(member_id)",
+      "CREATE INDEX IF NOT EXISTS idx_invitation_code_uses_code_used ON invitation_code_uses(code, used_at)",
       "CREATE INDEX IF NOT EXISTS idx_email_verification_email_created ON email_verification_codes(email, created_at)",
       "CREATE INDEX IF NOT EXISTS idx_email_verification_invite_created ON email_verification_codes(invite_code, created_at)",
       "CREATE INDEX IF NOT EXISTS idx_password_reset_email_created ON password_reset_codes(email, created_at)",
@@ -412,6 +440,8 @@ export async function ensureDatabase() {
       "CREATE INDEX IF NOT EXISTS idx_problem_views_member_viewed ON problem_views(member_id, viewed_at)",
       "CREATE INDEX IF NOT EXISTS idx_playground_posts_updated_at ON playground_posts(updated_at)",
       "CREATE INDEX IF NOT EXISTS idx_playground_posts_author_id ON playground_posts(author_id)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_playground_share_tokens_token ON playground_share_tokens(token)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_problem_share_tokens_token ON problem_share_tokens(token)",
       "CREATE INDEX IF NOT EXISTS idx_playground_tags_tag ON playground_tags(tag)",
       "CREATE INDEX IF NOT EXISTS idx_playground_resources_post_id ON playground_resources(post_id)",
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_playground_resources_storage_key ON playground_resources(storage_key)",
@@ -443,35 +473,53 @@ export async function ensureDatabase() {
             SELECT 1 FROM invitation_codes invitation
             JOIN members inviter ON inviter.id = invitation.created_by
             WHERE invitation.code = NEW.registration_invite_code
-              AND invitation.used_by IS NULL
-              AND invitation.used_at IS NULL
               AND invitation.revoked_at IS NULL
+              AND invitation.remaining_uses > 0
               AND inviter.invite_quota > 0
           ) THEN RAISE(ABORT, 'INVITATION_UNAVAILABLE') END;
           UPDATE members SET invite_quota = invite_quota - 1
           WHERE id = (SELECT created_by FROM invitation_codes WHERE code = NEW.registration_invite_code)
             AND invite_quota > 0;
+          UPDATE invitation_codes SET remaining_uses = remaining_uses - 1
+          WHERE code = NEW.registration_invite_code
+            AND revoked_at IS NULL
+            AND remaining_uses > 0;
         END`,
       `CREATE TRIGGER IF NOT EXISTS trg_invitation_generation_limit
         BEFORE INSERT ON invitation_codes
-        WHEN NEW.used_by IS NULL AND NEW.used_at IS NULL AND NEW.revoked_at IS NULL
+        WHEN NEW.revoked_at IS NULL
         BEGIN
           SELECT CASE WHEN NOT EXISTS (
             SELECT 1 FROM members inviter
             WHERE inviter.id = NEW.created_by
-              AND inviter.invite_quota > (
-                SELECT COUNT(*) FROM invitation_codes existing
+              AND inviter.invite_quota >= NEW.remaining_uses + (
+                SELECT COALESCE(SUM(existing.remaining_uses), 0) FROM invitation_codes existing
                 WHERE existing.created_by = NEW.created_by
-                  AND existing.used_by IS NULL
-                  AND existing.used_at IS NULL
                   AND existing.revoked_at IS NULL
+                  AND existing.remaining_uses > 0
+              )
+          ) THEN RAISE(ABORT, 'INVITATION_LIMIT_REACHED') END;
+        END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_invitation_allocation_limit
+        BEFORE UPDATE OF remaining_uses ON invitation_codes
+        BEGIN
+          SELECT CASE WHEN NEW.remaining_uses < 0 THEN RAISE(ABORT, 'INVITATION_LIMIT_REACHED') END;
+          SELECT CASE WHEN NEW.revoked_at IS NULL AND NEW.remaining_uses > OLD.remaining_uses AND NOT EXISTS (
+            SELECT 1 FROM members inviter
+            WHERE inviter.id = NEW.created_by
+              AND inviter.invite_quota >= NEW.remaining_uses + (
+                SELECT COALESCE(SUM(existing.remaining_uses), 0) FROM invitation_codes existing
+                WHERE existing.created_by = NEW.created_by
+                  AND existing.code != NEW.code
+                  AND existing.revoked_at IS NULL
+                  AND existing.remaining_uses > 0
               )
           ) THEN RAISE(ABORT, 'INVITATION_LIMIT_REACHED') END;
         END`,
     ];
 
     const bootstrapStatements: Array<[string, unknown[]]> = [
-      ["INSERT OR IGNORE INTO members (id,email,username,display_name,initials,bio,location,public_email,specialties,role,invite_quota,password_salt,password_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ["member-admin", "admin@example.com", "SinCircle", "SinCircle", "SC", "系统超级管理员。", "", "", JSON.stringify([]), "superadmin", 10, adminPasswordSalt, adminPasswordHash, "2026-08-11T10:45:00.000Z"]],
+      ["INSERT OR IGNORE INTO members (id,email,username,display_name,initials,bio,location,public_email,specialties,role,invite_quota,password_salt,password_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ["member-admin", "qiuyufeng25@mails.ucas.ac.cn", "SinCircle", "SinCircle", "SC", "系统超级管理员。", "", "", JSON.stringify([]), "superadmin", 10, adminPasswordSalt, adminPasswordHash, "2026-08-11T10:45:00.000Z"]],
       ["INSERT OR IGNORE INTO api_global_control (id,enabled,changed_by,changed_at) VALUES ('global',1,NULL,?)", ["2026-08-14T00:00:00.000Z"]],
       ["INSERT OR IGNORE INTO members (id,email,username,display_name,initials,bio,location,public_email,specialties,role,invite_quota,password_salt,password_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ["member-xu-wen", "xuwen@example.org", "xuwen", "许闻", "XW", "数论研究者，关注素数分布与丢番图方程中的初等方法。希望把复杂证明拆成可以独立验证的小步骤，也欢迎不同思路并行推进。", "上海", "xuwen@example.org", JSON.stringify(["解析数论", "初等数论", "丢番图方程"]), "superadmin", 3, bootstrapPasswordSalt, bootstrapPasswordHash, "2025-03-12T08:00:00.000Z"]],
       ["INSERT OR IGNORE INTO members (id,email,username,display_name,initials,bio,location,public_email,specialties,role,invite_quota,password_salt,password_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ["member-lin-cheng", "lincheng@example.org", "lincheng", "林澄", "LC", "研究代数数论与有限域方法。", "北京", "", JSON.stringify(["代数数论", "有限域"]), "member", 0, bootstrapPasswordSalt, bootstrapPasswordHash, "2025-05-20T08:00:00.000Z"]],
@@ -535,12 +583,13 @@ export async function ensureDatabase() {
       // The design prototype used a smaller `problems` table. Upgrade it in place so
       // existing local and hosted D1 databases remain usable after the formal rebuild.
       await db.batch(tableStatements.map((sql) => db.prepare(sql)));
-      const [problemColumns, memberColumns, messageColumns, invitationColumns, playgroundCommentColumns, apiKeyColumns, apiRequestColumns] = await Promise.all([
+      const [problemColumns, memberColumns, messageColumns, invitationColumns, playgroundCommentColumns, playgroundInteractionColumns, apiKeyColumns, apiRequestColumns] = await Promise.all([
         db.prepare("PRAGMA table_info(problems)").all<{ name: string }>(),
         db.prepare("PRAGMA table_info(members)").all<{ name: string }>(),
         db.prepare("PRAGMA table_info(messages)").all<{ name: string }>(),
         db.prepare("PRAGMA table_info(invitation_codes)").all<{ name: string }>(),
         db.prepare("PRAGMA table_info(playground_comments)").all<{ name: string }>(),
+        db.prepare("PRAGMA table_info(playground_interactions)").all<{ name: string }>(),
         db.prepare("PRAGMA table_info(api_keys)").all<{ name: string }>(),
         db.prepare("PRAGMA table_info(api_requests)").all<{ name: string }>(),
       ]);
@@ -549,11 +598,13 @@ export async function ensureDatabase() {
       const messageColumnNames = new Set(messageColumns.results.map((column) => column.name));
       const invitationColumnNames = new Set(invitationColumns.results.map((column) => column.name));
       const playgroundCommentColumnNames = new Set(playgroundCommentColumns.results.map((column) => column.name));
+      const playgroundInteractionColumnNames = new Set(playgroundInteractionColumns.results.map((column) => column.name));
       const apiKeyColumnNames = new Set(apiKeyColumns.results.map((column) => column.name));
       const apiRequestColumnNames = new Set(apiRequestColumns.results.map((column) => column.name));
       const legacyUpgrades: string[] = [];
       const addedLegacyProblemIdentity = !columnNames.has("short_code");
       const addedInvitationRevocation = !invitationColumnNames.has("revoked_at");
+      const addedInvitationRemainingUses = !invitationColumnNames.has("remaining_uses");
       if (!columnNames.has("short_code")) {
         legacyUpgrades.push("ALTER TABLE problems ADD COLUMN short_code TEXT NOT NULL DEFAULT ''");
       }
@@ -590,11 +641,18 @@ export async function ensureDatabase() {
       if (addedInvitationRevocation) {
         legacyUpgrades.push("ALTER TABLE invitation_codes ADD COLUMN revoked_at TEXT");
       }
+      if (addedInvitationRemainingUses) {
+        legacyUpgrades.push("ALTER TABLE invitation_codes ADD COLUMN remaining_uses INTEGER NOT NULL DEFAULT 1");
+      }
       if (!playgroundCommentColumnNames.has("marker")) {
         legacyUpgrades.push("ALTER TABLE playground_comments ADD COLUMN marker TEXT");
       }
       if (!playgroundCommentColumnNames.has("is_featured")) {
         legacyUpgrades.push("ALTER TABLE playground_comments ADD COLUMN is_featured INTEGER NOT NULL DEFAULT 0");
+      }
+      const addedPlaygroundFirstInteraction = !playgroundInteractionColumnNames.has("first_interacted_at");
+      if (addedPlaygroundFirstInteraction) {
+        legacyUpgrades.push("ALTER TABLE playground_interactions ADD COLUMN first_interacted_at TEXT NOT NULL DEFAULT ''");
       }
       if (!apiKeyColumnNames.has("scope_violation_count")) {
         legacyUpgrades.push("ALTER TABLE api_keys ADD COLUMN scope_violation_count INTEGER NOT NULL DEFAULT 0");
@@ -625,7 +683,27 @@ export async function ensureDatabase() {
             WHERE created_by = members.id AND used_by IS NULL AND used_at IS NULL
           )`).run();
         }
+        if (addedInvitationRemainingUses) {
+          await db.prepare(`UPDATE invitation_codes SET remaining_uses = CASE
+            WHEN used_by IS NOT NULL OR used_at IS NOT NULL THEN 0 ELSE 1 END`).run();
+          await db.prepare(`INSERT OR IGNORE INTO invitation_code_uses (id,code,member_id,used_at)
+            SELECT 'legacy-' || code,code,used_by,used_at FROM invitation_codes
+            WHERE used_by IS NOT NULL AND used_at IS NOT NULL`).run();
+        }
+        if (addedPlaygroundFirstInteraction) {
+          await db.prepare("UPDATE playground_interactions SET first_interacted_at = last_interacted_at WHERE first_interacted_at = ''").run();
+        }
       }
+
+      // Batch invitation codes allow several members to share one registration
+      // code. Replace the historical unique index and the one-use triggers before
+      // recreating the current guards below.
+      await db.batch([
+        db.prepare("DROP INDEX IF EXISTS idx_members_registration_invite_code"),
+        db.prepare("DROP TRIGGER IF EXISTS trg_member_registration_invite_quota"),
+        db.prepare("DROP TRIGGER IF EXISTS trg_invitation_generation_limit"),
+        db.prepare("DROP TRIGGER IF EXISTS trg_invitation_allocation_limit"),
+      ]);
 
       await db.batch([
         db.prepare(`INSERT OR IGNORE INTO playground_comment_reactions (comment_id,member_id,emoji,created_at)

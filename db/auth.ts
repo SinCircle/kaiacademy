@@ -187,11 +187,11 @@ export async function register(input: Record<string, unknown>) {
   const invitation = await db
     .prepare(`SELECT invitation.code FROM invitation_codes invitation
       JOIN members inviter ON inviter.id = invitation.created_by
-      WHERE invitation.code = ? AND invitation.used_by IS NULL AND invitation.used_at IS NULL
+      WHERE invitation.code = ? AND invitation.remaining_uses > 0
         AND invitation.revoked_at IS NULL AND inviter.invite_quota > 0`)
     .bind(inviteCode)
     .first<{ code: string }>();
-  if (!invitation) throw new AuthError("邀请码无效、已被使用、已作废或邀请名额已用完");
+  if (!invitation) throw new AuthError("邀请码无效、额度已用完、已作废或邀请名额已用完");
   const duplicate = await db
     .prepare("SELECT id FROM members WHERE email = ? OR username = ?")
     .bind(email, username)
@@ -210,17 +210,19 @@ export async function register(input: Record<string, unknown>) {
       ) VALUES (?, ?, ?, ?, ?, '', '', '', '[]', 'member', 'active', ?, 0, ?, ?, ?)`)
         .bind(memberId, email, username, username, initialsFor(username), inviteCode, salt, hash, createdAt),
       db.prepare(`UPDATE invitation_codes SET used_by = ?, used_at = ?
-        WHERE code = ? AND used_by IS NULL AND used_at IS NULL AND revoked_at IS NULL`)
+        WHERE code = ? AND revoked_at IS NULL`)
         .bind(memberId, createdAt, inviteCode),
+      db.prepare(`INSERT INTO invitation_code_uses (id,code,member_id,used_at) VALUES (?,?,?,?)`)
+        .bind(`invitation-use-${crypto.randomUUID()}`, inviteCode, memberId, createdAt),
       db.prepare("UPDATE email_verification_codes SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL")
         .bind(createdAt, verification.id),
     ]);
   } catch (error) {
     if (error instanceof Error && /INVITATION_UNAVAILABLE/i.test(error.message)) {
-      throw new AuthError("邀请码无效、已被使用、已作废或邀请名额已用完", 409);
+      throw new AuthError("邀请码无效、额度已用完、已作废或邀请名额已用完", 409);
     }
     if (error instanceof Error && /UNIQUE|constraint/i.test(error.message)) {
-      throw new AuthError("邮箱、用户名或邀请码已经被使用", 409);
+      throw new AuthError("邮箱或用户名已经被使用", 409);
     }
     throw error;
   }

@@ -25,6 +25,7 @@ export type ProblemCard = {
   updatedAt: string;
   tags: string[];
   participantCount: number;
+  attentionCount: number;
   participantAvatars: Array<{ id: string; initials: string; avatarUpdatedAt: string | null }>;
   participantInitials: string[];
   viewerRelation: "watching" | "following" | "participating";
@@ -86,7 +87,7 @@ export type ProblemDetailData = {
   participants: ProblemPerson[];
   followers: ProblemPerson[];
   messages: DiscussionMessage[];
-  viewer: SessionMember & {
+  viewer: (SessionMember & {
     relation: "watching" | "following" | "participating";
     locked: boolean;
     isCreator: boolean;
@@ -95,6 +96,6 @@ export type ProblemDetailData = {
     canEditProblem: boolean;
     canAdopt: boolean;
     canModerateComments: boolean;
-  };
+  }) | null;
   availableMembers: Array<{ id: string; username: string; displayName: string; initials: string }>;
 };

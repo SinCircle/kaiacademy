@@ -26,7 +26,7 @@ export const members = sqliteTable(
   (table) => [
     uniqueIndex("idx_members_email").on(table.email),
     uniqueIndex("idx_members_username").on(table.username),
-    uniqueIndex("idx_members_registration_invite_code").on(table.registrationInviteCode),
+    index("idx_members_registration_invite_code").on(table.registrationInviteCode),
   ],
 );
 
@@ -65,8 +65,23 @@ export const invitationCodes = sqliteTable(
     createdAt: text("created_at").notNull(),
     usedAt: text("used_at"),
     revokedAt: text("revoked_at"),
+    remainingUses: integer("remaining_uses").notNull().default(1),
   },
   (table) => [index("idx_invitation_codes_created_by").on(table.createdBy)],
+);
+
+export const invitationCodeUses = sqliteTable(
+  "invitation_code_uses",
+  {
+    id: text("id").primaryKey(),
+    code: text("code").notNull().references(() => invitationCodes.code, { onDelete: "cascade" }),
+    memberId: text("member_id").notNull().references(() => members.id, { onDelete: "cascade" }),
+    usedAt: text("used_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_invitation_code_uses_member").on(table.memberId),
+    index("idx_invitation_code_uses_code_used").on(table.code, table.usedAt),
+  ],
 );
 
 export const emailVerificationCodes = sqliteTable(
@@ -241,6 +256,30 @@ export const playgroundPosts = sqliteTable(
   (table) => [index("idx_playground_posts_updated_at").on(table.updatedAt), index("idx_playground_posts_author_id").on(table.authorId)],
 );
 
+export const playgroundShareTokens = sqliteTable(
+  "playground_share_tokens",
+  {
+    postId: text("post_id").primaryKey().references(() => playgroundPosts.id, { onDelete: "cascade" }),
+    token: text("token").notNull(),
+    createdBy: text("created_by").notNull().references(() => members.id, { onDelete: "cascade" }),
+    createdAt: text("created_at").notNull(),
+    revokedAt: text("revoked_at"),
+  },
+  (table) => [uniqueIndex("idx_playground_share_tokens_token").on(table.token)],
+);
+
+export const problemShareTokens = sqliteTable(
+  "problem_share_tokens",
+  {
+    problemId: text("problem_id").primaryKey().references(() => problems.id, { onDelete: "cascade" }),
+    token: text("token").notNull(),
+    createdBy: text("created_by").notNull().references(() => members.id, { onDelete: "cascade" }),
+    createdAt: text("created_at").notNull(),
+    revokedAt: text("revoked_at"),
+  },
+  (table) => [uniqueIndex("idx_problem_share_tokens_token").on(table.token)],
+);
+
 export const playgroundTags = sqliteTable(
   "playground_tags",
   {
@@ -334,6 +373,7 @@ export const playgroundInteractions = sqliteTable(
   {
     postId: text("post_id").notNull().references(() => playgroundPosts.id, { onDelete: "cascade" }),
     memberId: text("member_id").notNull().references(() => members.id, { onDelete: "cascade" }),
+    firstInteractedAt: text("first_interacted_at").notNull(),
     lastInteractedAt: text("last_interacted_at").notNull(),
   },
   (table) => [primaryKey({ columns: [table.postId, table.memberId] }), index("idx_playground_interactions_member_id").on(table.memberId)],

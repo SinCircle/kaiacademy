@@ -12,7 +12,7 @@ export async function GET(request: Request) {
       type: url.searchParams.get("type") ?? "all",
       tag: url.searchParams.get("tag") ?? "",
       format: url.searchParams.get("format") ?? "",
-      sort: url.searchParams.get("sort") ?? "latest",
+      sort: url.searchParams.get("sort") ?? "updated",
       viewerId: member.id,
     });
     return cachedJsonResponse(request, { posts });
